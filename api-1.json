@@ -1,0 +1,3181 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "RailGadi API",
+    "version": "2.0.0",
+    "description": "Live train tracking and Indian Railways data API.\n\n**Base URL:** `https://2fe4m4jegh2fuhgkk3u7v4sqv40qpago.lambda-url.ap-south-1.on.aws`\n\nAll responses are wrapped in a standard envelope:\n```json\n{\n  \"success\": true,\n  \"data\": { ... },\n  \"meta\": {\n    \"traceId\": \"uuid\",\n    \"timestamp\": \"2026-03-17T09:01:49+05:30\",\n    \"executionTime\": 183,\n    \"source\": \"database | hybrid | external\"\n  }\n}\n```",
+    "contact": {
+      "name": "RailGadi",
+      "url": "https://railradar.in"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://2fe4m4jegh2fuhgkk3u7v4sqv40qpago.lambda-url.ap-south-1.on.aws",
+      "description": "Production"
+    },
+    {
+      "url": "http://localhost:3001",
+      "description": "Local dev"
+    },
+    {
+      "url": "http://141.148.218.234:3001",
+      "description": "Local dev"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Trains",
+      "description": "Train schedules, routes, and live tracking"
+    },
+    {
+      "name": "Stations",
+      "description": "Station board and live arrival/departure"
+    },
+    {
+      "name": "Live Map",
+      "description": "Real-time positions of all running trains"
+    },
+    {
+      "name": "Lookup",
+      "description": "Fast key-value lookups for stations and trains"
+    },
+    {
+      "name": "Legacy",
+      "description": "Legacy API endpoints for backward compatibility"
+    }
+  ],
+  "paths": {
+    "/trains/{number}": {
+      "get": {
+        "tags": [
+          "Trains"
+        ],
+        "summary": "Get train details",
+        "description": "Returns static train info with full schedule. Use `haltsOnly=true` to skip pass-through stops.",
+        "operationId": "getTrainDetails",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/trainNumber"
+          },
+          {
+            "name": "haltsOnly",
+            "in": "query",
+            "required": false,
+            "description": "Return only halting stops (excludes pass-through). Default: `false`",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Train details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrainDetailsEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/trains/{number}/route": {
+      "get": {
+        "tags": [
+          "Trains"
+        ],
+        "summary": "Train route geometry",
+        "description": "Returns the route geometry for a train.\n\n**Format options (`format` param):**\n- `geojson` (default) — GeoJSON `LineString` feature. Ready for Leaflet, MapLibre, QGIS, geojson.io.\n- `polyline` — [Google encoded polyline](https://developers.google.com/maps/documentation/utilities/polylinealgorithm) (precision 5). Smallest payload (~8KB avg). Decode with any standard polyline library.\n- `coordinates` — Raw `[[lat, lng], ...]` array. For custom renderers.\n\n**Stops (`stops` param):**\nPass `stops=true` to include all station stops (code, name, lat, lng, sequence) alongside the geometry. Useful for drawing station markers on the route in a single request.\n\nReturns `null` geometry if the route has not been generated yet (run `route:generate` pipeline step).",
+        "operationId": "getTrainRoute",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/trainNumber"
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Response format for the geometry. Default: `geojson`",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "polyline",
+                "geojson",
+                "coordinates"
+              ],
+              "default": "geojson"
+            }
+          },
+          {
+            "name": "stops",
+            "in": "query",
+            "required": false,
+            "description": "Include station stops (code, name, lat, lng) alongside the geometry. Default: `false`",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Train route geometry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrainRouteEnvelope"
+                },
+                "examples": {
+                  "geojson": {
+                    "summary": "format=geojson (default)",
+                    "value": {
+                      "success": true,
+                      "data": {
+                        "trainNumber": "12919",
+                        "format": "geojson",
+                        "geojson": {
+                          "type": "Feature",
+                          "properties": {
+                            "trainNumber": "12919"
+                          },
+                          "geometry": {
+                            "type": "LineString",
+                            "coordinates": [
+                              [
+                                75.78,
+                                23.17
+                              ],
+                              [
+                                76.71,
+                                23.18
+                              ]
+                            ]
+                          }
+                        }
+                      },
+                      "meta": {
+                        "traceId": "uuid",
+                        "timestamp": "2026-03-24T10:00:00+05:30"
+                      }
+                    }
+                  },
+                  "polyline": {
+                    "summary": "format=polyline",
+                    "value": {
+                      "success": true,
+                      "data": {
+                        "trainNumber": "12919",
+                        "format": "polyline",
+                        "encodedPolyline": "_p~iF~ps|U_ulLnnqC_mqNvxq`@"
+                      },
+                      "meta": {
+                        "traceId": "uuid",
+                        "timestamp": "2026-03-24T10:00:00+05:30"
+                      }
+                    }
+                  },
+                  "withStops": {
+                    "summary": "format=geojson&stops=true",
+                    "value": {
+                      "success": true,
+                      "data": {
+                        "trainNumber": "12919",
+                        "format": "geojson",
+                        "geojson": {
+                          "type": "Feature",
+                          "properties": {
+                            "trainNumber": "12919"
+                          },
+                          "geometry": {
+                            "type": "LineString",
+                            "coordinates": [
+                              [
+                                75.78,
+                                23.17
+                              ]
+                            ]
+                          }
+                        },
+                        "stops": [
+                          {
+                            "sequence": 1,
+                            "code": "INDB",
+                            "name": "Indore Junction",
+                            "lat": 22.72,
+                            "lng": 75.86
+                          }
+                        ]
+                      },
+                      "meta": {
+                        "traceId": "uuid",
+                        "timestamp": "2026-03-24T10:00:00+05:30"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/trains/{number}/live": {
+      "get": {
+        "tags": [
+          "Trains"
+        ],
+        "summary": "Live train tracking",
+        "description": "Real-time position, delay, and per-stop status for a train journey.\n\n- `date` is optional — omit it and the API auto-detects the most recent journey date based on the train's running days and current IST time.\n- `currentLocation` includes GPS `coordinates` when live position data is available from external sources.\n- `status` can be `running`, `not-started`, `completed`, or `cancelled`.",
+        "operationId": "getLiveTrainTracking",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/trainNumber"
+          },
+          {
+            "name": "date",
+            "in": "query",
+            "required": false,
+            "description": "Journey start date (YYYY-MM-DD). Omit to auto-detect.",
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "example": "2026-03-14"
+            }
+          },
+          {
+            "name": "haltsOnly",
+            "in": "query",
+            "required": false,
+            "description": "Return only halting stops in the route array. Default: `false`",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "geometry",
+            "in": "query",
+            "required": false,
+            "description": "Include route geometry (polyline/GeoJSON/coordinates). Default: `false`",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Geometry format when `geometry=true`. Default: `polyline`",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "polyline",
+                "geojson",
+                "coordinates"
+              ],
+              "default": "polyline"
+            }
+          },
+          {
+            "name": "includeCoordinates",
+            "in": "query",
+            "required": false,
+            "description": "Include latitude and longitude for each station in the route array. Default: `false`",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Live train tracking data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveTrainEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/trains/between/{from}/{to}": {
+      "get": {
+        "tags": [
+          "Trains"
+        ],
+        "summary": "Trains between two stations",
+        "description": "Find all trains running between two stations, with optional date filtering and live status.\n\n**Date filtering (`date` param):**\nTrains run on specific weekdays. A train that departs its source on Saturday may only reach an intermediate station (e.g. UJN) on Sunday. The `date` param filters by the date the train is at the `from` station — not the source departure date.\n\nInternally: `sourceDepDate = date − (fromDay − 1)`, then the source departure weekday is checked against the train's running days bitmap.\n\n- Omit `date` → all trains returned regardless of day (useful for showing a full timetable)\n- Pass `date` → only trains that actually run on that date at the `from` station\n- Returns 404 if no trains run on the given date\n\n**Live status (`live` param):**\n- `live=false` (default) — static schedule only, very fast\n- `live=true` — enriches each train with a `live` object at the `from` station:\n  - `at-station` — train is currently at the station\n  - `upcoming` — train is approaching\n  - `departed` — train has left\n  - `scheduled` — no live data yet\n  - `not-running` — train not running (future date, cancelled, or no data)\n\n**Future dates with `live=true`:** External data sources are not queried. Every train gets `{ \"type\": \"not-running\", \"startDate\": \"...\" }` immediately.",
+        "operationId": "getTrainsBetweenStations",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "path",
+            "required": true,
+            "description": "Source station code (e.g. `UJN`)",
+            "schema": {
+              "type": "string",
+              "example": "UJN"
+            }
+          },
+          {
+            "name": "to",
+            "in": "path",
+            "required": true,
+            "description": "Destination station code (e.g. `INDB`)",
+            "schema": {
+              "type": "string",
+              "example": "INDB"
+            }
+          },
+          {
+            "name": "date",
+            "in": "query",
+            "required": false,
+            "description": "Filter trains by the date they are at the `from` station (YYYY-MM-DD). Accounts for multi-day journeys — a train departing its source on Saturday may arrive at an intermediate station on Sunday, so passing Sunday here will correctly include it. Omit to return all trains regardless of running day.",
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "example": "2026-03-15"
+            }
+          },
+          {
+            "name": "live",
+            "in": "query",
+            "required": false,
+            "description": "Enrich each train with live status at the `from` station. Default: `false`. When `true`, queries live data records for trains that could currently be running (source departed today or yesterday). For future dates, returns `not-running` for all trains without querying external sources.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of trains between stations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrainsBetweenEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "description": "No trains found between the given stations (or none run on the requested date)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "noTrains": {
+                    "summary": "No trains between these stations",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "NO_TRAINS_FOUND",
+                        "message": "No trains found between UJN and INDB"
+                      }
+                    }
+                  },
+                  "noTrainsOnDate": {
+                    "summary": "No trains on the requested date",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "NO_TRAINS_FOUND",
+                        "message": "No trains found between UJN and INDB on 2026-03-15"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/stations/{code}/trains": {
+      "get": {
+        "tags": [
+          "Stations"
+        ],
+        "summary": "Station train board (static)",
+        "description": "All trains that stop at a station with scheduled times. Use `includeIntermediate=true` to also include pass-through trains.",
+        "operationId": "getStationBoard",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/stationCode"
+          },
+          {
+            "name": "includeIntermediate",
+            "in": "query",
+            "required": false,
+            "description": "Include pass-through (non-halting) trains. Default: `false`",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Station board",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StationBoardEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/stations/{code}/live": {
+      "get": {
+        "tags": [
+          "Stations"
+        ],
+        "summary": "Station live board",
+        "description": "Live arrival/departure board — similar to platform displays.\n\n**Time window:** `[now − 4h, now + hoursAhead]`\n\nEach train entry includes a `live` object with one of:\n- `at-station` — train is currently at the station (includes `expectedDepartureTime`)\n- `upcoming` — train is approaching (includes `expectedArrivalTime`)\n- `departed` — train has left (includes `departedAt`)\n- `scheduled` — no live data yet, showing scheduled time\n\n**Buffer logic:** Trains whose scheduled time is in the past are only shown if live data confirms they are still `at-station` or `upcoming`. Already-departed or no-data trains in the buffer window are dropped.",
+        "operationId": "getStationLiveBoard",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/stationCode"
+          },
+          {
+            "name": "hours",
+            "in": "query",
+            "required": false,
+            "description": "Hours ahead to look for trains. Allowed: `2`, `4`, `6`, `8`. Default: `4`",
+            "schema": {
+              "type": "integer",
+              "enum": [
+                2,
+                4,
+                6,
+                8
+              ],
+              "default": 4
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Live station board",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StationLiveEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/live-map": {
+      "get": {
+        "tags": [
+          "Live Map"
+        ],
+        "summary": "All running trains with positions",
+        "description": "Enhanced live map showing real-time positions of all running trains.\n\nReturns an array of trains currently en route with:\n- Current station (last departed) and next station\n- Interpolated GPS coordinates between stations\n- Minutes since departure from source\n- Distance covered and remaining\n- Journey day information\n\nThe response includes metadata about:\n- Total trains in the system\n- Number of trains with live data records\n- Coverage percentage\n- Performance metrics (DB query time, external data fetch time, processing time)\n\nResponse is cached for 1 minute.",
+        "operationId": "getLiveMap",
+        "responses": {
+          "200": {
+            "description": "Live train positions with enhanced metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveMapEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/lookup/stations": {
+      "get": {
+        "tags": [
+          "Lookup"
+        ],
+        "summary": "All station codes → names",
+        "description": "Returns a flat `{ code: name }` map for every station. Useful for client-side autocomplete. Response is cached.",
+        "operationId": "lookupStations",
+        "responses": {
+          "200": {
+            "description": "Station lookup map",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LookupEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/lookup/trains": {
+      "get": {
+        "tags": [
+          "Lookup"
+        ],
+        "summary": "All train numbers → names (ACTIVE only)",
+        "description": "Returns a flat `{ number: name }` map for every **active** train. Cancelled/inactive trains are excluded. Response is cached.",
+        "operationId": "lookupTrains",
+        "responses": {
+          "200": {
+            "description": "Train lookup map",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LookupEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/lookup/trains/local": {
+      "get": {
+        "tags": [
+          "Lookup"
+        ],
+        "summary": "Local trains for a specific city",
+        "description": "Returns all local trains for a specific city as a flat `{ number: name }` map.\n\n**Local trains** are identified by having a non-empty `CITY` value in the database. Empty string in the `CITY` column indicates passenger trains (excluded from results).\n\n**Supported cities:**\n- Kolkata\n- Hyderabad\n- Mumbai\n- Chennai\n\nThe `city` parameter is **required** and case-insensitive. Response is cached.",
+        "operationId": "lookupLocalTrains",
+        "parameters": [
+          {
+            "name": "city",
+            "in": "query",
+            "required": true,
+            "description": "City name (case-insensitive). Must be one of: Kolkata, Hyderabad, Mumbai, Chennai",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "Kolkata",
+                "Hyderabad",
+                "Mumbai",
+                "Chennai"
+              ],
+              "example": "Mumbai"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Local trains lookup map for the specified city",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LookupEnvelope"
+                },
+                "examples": {
+                  "mumbai": {
+                    "summary": "Mumbai local trains",
+                    "value": {
+                      "success": true,
+                      "data": {
+                        "12345": "Mumbai Local Express",
+                        "12346": "Mumbai Suburban Fast",
+                        "12347": "Mumbai Local Passenger"
+                      },
+                      "meta": {
+                        "traceId": "uuid",
+                        "timestamp": "2026-03-17T09:01:49+05:30",
+                        "executionTime": 45,
+                        "source": "database"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error - missing or invalid city parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "missingCity": {
+                    "summary": "Missing city parameter",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "City parameter is required. Valid cities: Kolkata, Hyderabad, Mumbai, Chennai"
+                      },
+                      "meta": {
+                        "traceId": "uuid",
+                        "timestamp": "2026-03-17T09:07:22+05:30"
+                      }
+                    }
+                  },
+                  "invalidCity": {
+                    "summary": "Invalid city value",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "city: City must be one of: Kolkata, Hyderabad, Mumbai, Chennai"
+                      },
+                      "meta": {
+                        "traceId": "uuid",
+                        "timestamp": "2026-03-17T09:07:22+05:30"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/legacy/trains/{number}": {
+      "get": {
+        "tags": [
+          "Legacy"
+        ],
+        "summary": "Legacy train data endpoint",
+        "description": "Backward compatibility layer preserving the old API structure for existing clients.\n\n**Query parameters:**\n- `journeyDate` (optional) — Journey start date in YYYY-MM-DD format. If omitted, auto-detects based on train's running days and current IST time.\n- `dataType` (optional) — Data type to return. Default: `full`\n  - `full` — Static train data + live data (if available)\n  - `static` — Static train data only (schedule, route)\n  - `live` — Live tracking data only from external sources\n- `dataProvider` (optional) — Data provider preference. Default: `railradar`\n  - `railradar` — Use RailRadar database\n  - `NTES` — Use NTES (not currently implemented)\n- `userId` (optional) — User ID for tracking/analytics\n\n**Response format:**\nUnlike the new API endpoints, this returns the legacy `TrainData` format directly without the standard envelope wrapper. The response structure varies based on `dataType`:\n\n- `dataType=static` → Returns `{ train, route, metadata }`\n- `dataType=live` → Returns live status object with current location and route updates\n- `dataType=full` → Returns static data merged with live data when available\n\n**Caching:**\n- Static data: 24 hours\n- Live/full data: 20 seconds",
+        "operationId": "getLegacyTrainData",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/trainNumber"
+          },
+          {
+            "name": "journeyDate",
+            "in": "query",
+            "required": false,
+            "description": "Journey start date (YYYY-MM-DD). Auto-detected if omitted.",
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "example": "2026-03-14"
+            }
+          },
+          {
+            "name": "dataType",
+            "in": "query",
+            "required": false,
+            "description": "Type of data to return. Default: `full`",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "full",
+                "static",
+                "live"
+              ],
+              "default": "full"
+            }
+          },
+          {
+            "name": "dataProvider",
+            "in": "query",
+            "required": false,
+            "description": "Data provider preference. Default: `railradar`",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "railradar",
+                "NTES"
+              ],
+              "default": "railradar"
+            }
+          },
+          {
+            "name": "userId",
+            "in": "query",
+            "required": false,
+            "description": "User ID for tracking/analytics",
+            "schema": {
+              "type": "string",
+              "example": "user123"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Legacy train data (format varies by dataType parameter)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyTrainEnvelope"
+                },
+                "examples": {
+                  "static": {
+                    "summary": "dataType=static",
+                    "value": {
+                      "success": true,
+                      "data": {
+                        "train": {
+                          "trainNumber": "12919",
+                          "trainName": "Malwa SF Express",
+                          "type": "Superfast Express",
+                          "sourceStationCode": "INDB",
+                          "sourceStationName": "Indore Junction",
+                          "destinationStationCode": "DADN",
+                          "destinationStationName": "Dadri",
+                          "runningDaysBitmap": 127,
+                          "runningDays": {
+                            "days": [
+                              "mon",
+                              "tue",
+                              "wed",
+                              "thu",
+                              "fri",
+                              "sat",
+                              "sun"
+                            ],
+                            "allDays": true,
+                            "isStartingToday": true
+                          },
+                          "travelTimeMinutes": 1680,
+                          "totalHalts": 42,
+                          "distanceKm": 1920.4,
+                          "avgSpeedKmph": 68.6,
+                          "createdAt": 1710000000000,
+                          "updatedAt": 1710000000000
+                        },
+                        "route": [
+                          {
+                            "id": 1,
+                            "sequence": 1,
+                            "stationCode": "INDB",
+                            "stationName": "Indore Junction",
+                            "isHalt": 1,
+                            "scheduledDeparture": 1260,
+                            "day": 1,
+                            "distanceFromSourceKm": 0
+                          }
+                        ],
+                        "metadata": {
+                          "hasLiveData": false,
+                          "lastStaticUpdate": "2026-03-14T10:00:00.000Z",
+                          "canRefreshLive": true
+                        }
+                      },
+                      "meta": {
+                        "traceId": "uuid",
+                        "timestamp": "2026-03-14T15:30:00+05:30",
+                        "source": "database"
+                      }
+                    }
+                  },
+                  "live": {
+                    "summary": "dataType=live",
+                    "value": {
+                      "success": true,
+                      "data": {
+                        "trainNumber": "12919",
+                        "trainName": "Malwa SF Express",
+                        "journeyDate": "2026-03-14",
+                        "lastUpdatedAt": "2026-03-14T11:42:00+05:30",
+                        "currentLocation": {
+                          "stationCode": "UJN",
+                          "status": "departed"
+                        },
+                        "overallDelayMinutes": 12,
+                        "dataSource": "external",
+                        "route": []
+                      },
+                      "meta": {
+                        "traceId": "uuid",
+                        "timestamp": "2026-03-14T15:30:00+05:30",
+                        "source": "external"
+                      }
+                    }
+                  },
+                  "full": {
+                    "summary": "dataType=full (with live data)",
+                    "value": {
+                      "success": true,
+                      "data": {
+                        "train": {
+                          "trainNumber": "12919",
+                          "trainName": "Malwa SF Express"
+                        },
+                        "route": [],
+                        "liveData": {
+                          "trainNumber": "12919",
+                          "journeyDate": "2026-03-14",
+                          "lastUpdatedAt": "2026-03-14T11:42:00+05:30",
+                          "currentLocation": {
+                            "stationCode": "UJN",
+                            "status": "departed"
+                          },
+                          "overallDelayMinutes": 12
+                        },
+                        "metadata": {
+                          "hasLiveData": true,
+                          "lastStaticUpdate": "2026-03-14T10:00:00.000Z",
+                          "lastLiveUpdate": "2026-03-14T11:42:00+05:30",
+                          "canRefreshLive": true
+                        }
+                      },
+                      "meta": {
+                        "traceId": "uuid",
+                        "timestamp": "2026-03-14T15:30:00+05:30",
+                        "source": "hybrid"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "trainNumber": {
+        "name": "number",
+        "in": "path",
+        "required": true,
+        "description": "5-digit train number",
+        "schema": {
+          "type": "string",
+          "pattern": "^\\d{5}$",
+          "example": "12919"
+        }
+      },
+      "stationCode": {
+        "name": "code",
+        "in": "path",
+        "required": true,
+        "description": "Station code (1–10 uppercase characters)",
+        "schema": {
+          "type": "string",
+          "example": "UJN"
+        }
+      }
+    },
+    "responses": {
+      "NotFound": {
+        "description": "Resource not found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "example": {
+              "success": false,
+              "error": {
+                "code": "NOT_FOUND",
+                "message": "Resource not found"
+              },
+              "meta": {
+                "traceId": "uuid",
+                "timestamp": "2026-03-17T09:07:22+05:30"
+              }
+            }
+          }
+        }
+      },
+      "BadRequest": {
+        "description": "Validation error — invalid request parameters",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "example": {
+              "success": false,
+              "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "Invalid request parameters"
+              },
+              "meta": {
+                "traceId": "uuid",
+                "timestamp": "2026-03-17T09:07:22+05:30"
+              }
+            }
+          }
+        }
+      },
+      "ServiceUnavailable": {
+        "description": "Database or external service unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "example": {
+              "success": false,
+              "error": {
+                "code": "SERVICE_UNAVAILABLE",
+                "message": "Service temporarily unavailable"
+              },
+              "meta": {
+                "traceId": "uuid",
+                "timestamp": "2026-03-17T09:07:22+05:30"
+              }
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Meta": {
+        "type": "object",
+        "description": "Response metadata present on every successful response",
+        "properties": {
+          "traceId": {
+            "type": "string",
+            "format": "uuid",
+            "example": "9772f1c9-6ec6-4d9f-b269-a5210f33ec73"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-03-17T09:01:49+05:30"
+          },
+          "executionTime": {
+            "type": "number",
+            "description": "Execution time in milliseconds",
+            "example": 183
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "database",
+              "hybrid",
+              "external"
+            ],
+            "example": "database"
+          }
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "error"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": false
+          },
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "example": "VALIDATION_ERROR"
+              },
+              "message": {
+                "type": "string",
+                "example": "Invalid request parameters"
+              },
+              "details": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "LookupEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "description": "Flat map of code → name",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "example": {
+              "UJN": "Ujjain Junction",
+              "INDB": "Indore Junction"
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "StationRef": {
+        "type": "object",
+        "required": [
+          "code",
+          "name"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "UJN"
+          },
+          "name": {
+            "type": "string",
+            "example": "Ujjain Junction"
+          },
+          "lat": {
+            "type": "number",
+            "example": 23.1765,
+            "nullable": true
+          },
+          "lng": {
+            "type": "number",
+            "example": 75.7885,
+            "nullable": true
+          }
+        }
+      },
+      "Coordinates": {
+        "type": "object",
+        "required": [
+          "lat",
+          "lng"
+        ],
+        "properties": {
+          "lat": {
+            "type": "number",
+            "example": 23.1765
+          },
+          "lng": {
+            "type": "number",
+            "example": 75.7885
+          }
+        }
+      },
+      "TrainRouteEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "required": [
+              "trainNumber",
+              "format"
+            ],
+            "properties": {
+              "trainNumber": {
+                "type": "string",
+                "example": "12919"
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "polyline",
+                  "geojson",
+                  "coordinates"
+                ],
+                "example": "geojson"
+              },
+              "encodedPolyline": {
+                "type": "string",
+                "nullable": true,
+                "description": "Present when format=polyline. Google encoded polyline (precision 5).",
+                "example": "_p~iF~ps|U_ulLnnqC_mqNvxq`@"
+              },
+              "geojson": {
+                "nullable": true,
+                "description": "Present when format=geojson. GeoJSON LineString feature.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "example": "Feature"
+                  },
+                  "properties": {
+                    "type": "object",
+                    "properties": {
+                      "trainNumber": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "geometry": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "example": "LineString"
+                      },
+                      "coordinates": {
+                        "type": "array",
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "number"
+                          }
+                        },
+                        "description": "[lon, lat] pairs"
+                      }
+                    }
+                  }
+                }
+              },
+              "coordinates": {
+                "type": "array",
+                "nullable": true,
+                "description": "Present when format=coordinates. [[lat, lng], ...] pairs.",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  }
+                }
+              },
+              "stops": {
+                "type": "array",
+                "description": "Present when stops=true. Station stops along the route.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "sequence": {
+                      "type": "integer",
+                      "example": 1
+                    },
+                    "code": {
+                      "type": "string",
+                      "example": "INDB"
+                    },
+                    "name": {
+                      "type": "string",
+                      "example": "Indore Junction"
+                    },
+                    "lat": {
+                      "type": "number",
+                      "nullable": true,
+                      "example": 22.72
+                    },
+                    "lng": {
+                      "type": "number",
+                      "nullable": true,
+                      "example": 75.86
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "TrainDetailsEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "required": [
+              "train",
+              "route"
+            ],
+            "properties": {
+              "train": {
+                "$ref": "#/components/schemas/TrainInfo"
+              },
+              "route": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/StaticRouteStop"
+                }
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "TrainInfo": {
+        "type": "object",
+        "required": [
+          "number",
+          "name",
+          "source",
+          "destination",
+          "runDays"
+        ],
+        "properties": {
+          "number": {
+            "type": "string",
+            "example": "12919"
+          },
+          "name": {
+            "type": "string",
+            "example": "Malwa SF Express"
+          },
+          "type": {
+            "type": "string",
+            "example": "Superfast Express",
+            "nullable": true
+          },
+          "source": {
+            "$ref": "#/components/schemas/StationRef"
+          },
+          "destination": {
+            "$ref": "#/components/schemas/StationRef"
+          },
+          "runDays": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "example": [
+              "mon",
+              "tue",
+              "wed",
+              "thu",
+              "fri",
+              "sat",
+              "sun"
+            ]
+          },
+          "distance": {
+            "type": "number",
+            "description": "Total route distance in km",
+            "example": 1920.4,
+            "nullable": true
+          },
+          "duration": {
+            "type": "integer",
+            "description": "Total journey time in minutes",
+            "example": 1680,
+            "nullable": true
+          },
+          "avgSpeed": {
+            "type": "number",
+            "example": 68.6,
+            "nullable": true
+          },
+          "maxSpeed": {
+            "type": "number",
+            "example": 110,
+            "nullable": true
+          },
+          "totalHalts": {
+            "type": "integer",
+            "example": 42,
+            "nullable": true
+          },
+          "returnTrain": {
+            "type": "string",
+            "example": "12920",
+            "nullable": true
+          }
+        }
+      },
+      "StaticRouteStop": {
+        "type": "object",
+        "required": [
+          "sequence",
+          "station",
+          "isHalt"
+        ],
+        "properties": {
+          "sequence": {
+            "type": "integer",
+            "example": 1
+          },
+          "station": {
+            "$ref": "#/components/schemas/StationRef"
+          },
+          "arrival": {
+            "type": "string",
+            "description": "Scheduled arrival HH:MM",
+            "example": "14:30",
+            "nullable": true
+          },
+          "departure": {
+            "type": "string",
+            "description": "Scheduled departure HH:MM",
+            "example": "14:35",
+            "nullable": true
+          },
+          "arrivalDay": {
+            "type": "integer",
+            "description": "Journey day for arrival (1 = day of departure)",
+            "example": 1,
+            "nullable": true
+          },
+          "departureDay": {
+            "type": "integer",
+            "description": "Journey day for departure",
+            "example": 1,
+            "nullable": true
+          },
+          "distance": {
+            "type": "number",
+            "description": "km from source station",
+            "example": 142.5,
+            "nullable": true
+          },
+          "isHalt": {
+            "type": "boolean",
+            "example": true
+          },
+          "speedToNextStationKmph": {
+            "type": "number",
+            "description": "Static speed to next station in kmph",
+            "example": 60.5,
+            "nullable": true
+          }
+        }
+      },
+      "LiveTrainEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/LiveTrainData"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "LiveTrainData": {
+        "type": "object",
+        "required": [
+          "trainNumber",
+          "trainName",
+          "startDate",
+          "status",
+          "train",
+          "route"
+        ],
+        "properties": {
+          "trainNumber": {
+            "type": "string",
+            "example": "12919"
+          },
+          "trainName": {
+            "type": "string",
+            "example": "Malwa SF Express"
+          },
+          "startDate": {
+            "type": "string",
+            "format": "date",
+            "example": "2026-03-14"
+          },
+          "lastUpdatedAt": {
+            "type": "string",
+            "description": "ISO 8601 +05:30 — last live data update time",
+            "example": "2026-03-14T11:42:00+05:30",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "not-started",
+              "completed",
+              "cancelled"
+            ],
+            "example": "running"
+          },
+          "delayMinutes": {
+            "type": "integer",
+            "example": 12,
+            "nullable": true
+          },
+          "train": {
+            "$ref": "#/components/schemas/TrainInfo"
+          },
+          "currentLocation": {
+            "$ref": "#/components/schemas/CurrentLocation"
+          },
+          "previousHalt": {
+            "$ref": "#/components/schemas/HaltContext"
+          },
+          "nextHalt": {
+            "$ref": "#/components/schemas/HaltContext"
+          },
+          "exceptions": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "$ref": "#/components/schemas/APITrainException"
+            }
+          },
+          "route": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiveRouteStop"
+            }
+          },
+          "geometry": {
+            "$ref": "#/components/schemas/TrainRouteGeometry",
+            "nullable": true,
+            "description": "Only present when ?geometry=true"
+          }
+        }
+      },
+      "CurrentLocation": {
+        "type": "object",
+        "nullable": true,
+        "required": [
+          "stationCode",
+          "status",
+          "isHalt"
+        ],
+        "properties": {
+          "stationCode": {
+            "type": "string",
+            "example": "UJN"
+          },
+          "sequence": {
+            "type": "integer",
+            "example": 23,
+            "nullable": true,
+            "description": "null when train is on a diverted route not in DB"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "at-station",
+              "departed"
+            ],
+            "example": "departed"
+          },
+          "isHalt": {
+            "type": "boolean",
+            "example": true
+          },
+          "isDiverted": {
+            "type": "boolean",
+            "example": false,
+            "nullable": true
+          },
+          "coordinates": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Coordinates"
+              }
+            ],
+            "nullable": true,
+            "description": "GPS coordinates — present when live position data is available"
+          },
+          "distanceFromOriginKm": {
+            "type": "number",
+            "example": 142.5,
+            "nullable": true,
+            "description": "Distance traveled from train origin station in km (rounded to 0.1km)"
+          },
+          "distanceFromLastStationKm": {
+            "type": "number",
+            "example": 5.2,
+            "nullable": true,
+            "description": "Distance traveled from the last station in km (rounded to 0.1km) — used for accurate progress calculation between stations"
+          }
+        }
+      },
+      "HaltContext": {
+        "type": "object",
+        "nullable": true,
+        "required": [
+          "stationCode",
+          "stationName",
+          "sequence"
+        ],
+        "properties": {
+          "stationCode": {
+            "type": "string",
+            "example": "INDB"
+          },
+          "stationName": {
+            "type": "string",
+            "example": "Indore Junction"
+          },
+          "sequence": {
+            "type": "integer",
+            "example": 20
+          },
+          "distance": {
+            "type": "number",
+            "example": 62.2,
+            "nullable": true
+          }
+        }
+      },
+      "LiveRouteStop": {
+        "type": "object",
+        "required": [
+          "sequence",
+          "stationCode",
+          "stationName",
+          "isHalt",
+          "status"
+        ],
+        "properties": {
+          "sequence": {
+            "type": "integer",
+            "example": 23
+          },
+          "stationCode": {
+            "type": "string",
+            "example": "UJN"
+          },
+          "stationName": {
+            "type": "string",
+            "example": "Ujjain Junction"
+          },
+          "isHalt": {
+            "type": "boolean",
+            "example": true
+          },
+          "lat": {
+            "type": "number",
+            "description": "Station latitude (only present when includeCoordinates=true)",
+            "example": 23.1815,
+            "nullable": true
+          },
+          "lng": {
+            "type": "number",
+            "description": "Station longitude (only present when includeCoordinates=true)",
+            "example": 75.7772,
+            "nullable": true
+          },
+          "scheduledArrival": {
+            "type": "string",
+            "description": "ISO 8601 +05:30",
+            "example": "2026-03-14T11:20:00+05:30",
+            "nullable": true
+          },
+          "scheduledDeparture": {
+            "type": "string",
+            "description": "ISO 8601 +05:30",
+            "example": "2026-03-14T11:35:00+05:30",
+            "nullable": true
+          },
+          "actualArrival": {
+            "type": "string",
+            "description": "ISO 8601 +05:30 — null if not yet arrived",
+            "nullable": true
+          },
+          "actualDeparture": {
+            "type": "string",
+            "description": "ISO 8601 +05:30 — null if not yet departed",
+            "nullable": true
+          },
+          "delayArrival": {
+            "type": "integer",
+            "description": "Arrival delay in minutes",
+            "nullable": true
+          },
+          "delayDeparture": {
+            "type": "integer",
+            "description": "Departure delay in minutes",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "departed",
+              "at-station",
+              "upcoming",
+              "diverted",
+              "cancelled"
+            ],
+            "example": "departed"
+          },
+          "distance": {
+            "type": "number",
+            "example": 1539.8,
+            "nullable": true
+          },
+          "speedToNextStationKmph": {
+            "type": "number",
+            "description": "Static speed to next station in kmph",
+            "example": 60.5,
+            "nullable": true
+          }
+        }
+      },
+      "APITrainException": {
+        "type": "object",
+        "nullable": true,
+        "required": [
+          "type",
+          "message"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "CANCELLED",
+              "PARTIALLY_CANCELLED",
+              "DIVERTED",
+              "RESCHEDULED",
+              "UNKNOWN"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "example": "Train is diverted between UJN and INDB"
+          },
+          "diverted": {
+            "type": "object",
+            "nullable": true,
+            "description": "Present when type=DIVERTED",
+            "properties": {
+              "from": {
+                "$ref": "#/components/schemas/ExceptionStation"
+              },
+              "to": {
+                "$ref": "#/components/schemas/ExceptionStation"
+              },
+              "divertedStations": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ExceptionStation"
+                },
+                "nullable": true
+              }
+            }
+          },
+          "partiallyCancelled": {
+            "type": "object",
+            "nullable": true,
+            "description": "Present when type=PARTIALLY_CANCELLED",
+            "properties": {
+              "changeType": {
+                "type": "string",
+                "enum": [
+                  "SOURCE",
+                  "DESTINATION"
+                ]
+              },
+              "originalStation": {
+                "$ref": "#/components/schemas/ExceptionStation"
+              },
+              "newStation": {
+                "$ref": "#/components/schemas/ExceptionStation"
+              }
+            }
+          },
+          "rescheduled": {
+            "type": "object",
+            "nullable": true,
+            "description": "Present when type=RESCHEDULED",
+            "properties": {
+              "station": {
+                "$ref": "#/components/schemas/ExceptionStation"
+              },
+              "originalTime": {
+                "type": "string",
+                "nullable": true
+              },
+              "newTime": {
+                "type": "string",
+                "nullable": true
+              },
+              "delayMinutes": {
+                "type": "integer",
+                "example": 45
+              }
+            }
+          }
+        }
+      },
+      "ExceptionStation": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "UJN"
+          },
+          "name": {
+            "type": "string",
+            "example": "Ujjain Junction",
+            "nullable": true
+          },
+          "sequence": {
+            "type": "integer",
+            "nullable": true
+          }
+        }
+      },
+      "TrainRouteGeometry": {
+        "type": "object",
+        "description": "Route geometry in the requested format. Only one of encodedPolyline / geojson / coordinates will be present.",
+        "required": [
+          "trainNumber",
+          "format"
+        ],
+        "properties": {
+          "trainNumber": {
+            "type": "string",
+            "example": "12301"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "polyline",
+              "geojson",
+              "coordinates"
+            ]
+          },
+          "encodedPolyline": {
+            "type": "string",
+            "nullable": true,
+            "description": "Google-encoded polyline (precision 5). Present when format=polyline."
+          },
+          "geojson": {
+            "type": "object",
+            "nullable": true,
+            "description": "GeoJSON LineString Feature. Present when format=geojson."
+          },
+          "coordinates": {
+            "type": "array",
+            "nullable": true,
+            "description": "[lat, lng] pairs. Present when format=coordinates.",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      },
+      "TrainsBetweenEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/TrainsBetweenData"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "TrainsBetweenData": {
+        "type": "object",
+        "required": [
+          "from",
+          "to",
+          "count",
+          "trains"
+        ],
+        "properties": {
+          "from": {
+            "$ref": "#/components/schemas/StationRef"
+          },
+          "to": {
+            "$ref": "#/components/schemas/StationRef"
+          },
+          "count": {
+            "type": "integer",
+            "example": 8
+          },
+          "trains": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TrainBetweenStations"
+            }
+          }
+        }
+      },
+      "TrainBetweenStations": {
+        "type": "object",
+        "required": [
+          "train",
+          "from",
+          "to",
+          "totalHaltsBetween"
+        ],
+        "properties": {
+          "train": {
+            "type": "object",
+            "required": [
+              "number",
+              "name",
+              "runDays"
+            ],
+            "properties": {
+              "number": {
+                "type": "string",
+                "example": "69211"
+              },
+              "name": {
+                "type": "string",
+                "example": "Ujjain - Indore Passenger"
+              },
+              "type": {
+                "type": "string",
+                "example": "Passenger",
+                "nullable": true
+              },
+              "runDays": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "example": [
+                  "mon",
+                  "tue",
+                  "wed",
+                  "thu",
+                  "fri",
+                  "sat",
+                  "sun"
+                ]
+              }
+            }
+          },
+          "from": {
+            "type": "object",
+            "required": [
+              "day",
+              "sequence"
+            ],
+            "properties": {
+              "departure": {
+                "type": "string",
+                "description": "Scheduled departure HH:MM",
+                "example": "06:00",
+                "nullable": true
+              },
+              "day": {
+                "type": "integer",
+                "description": "Journey day number at from-station (1 = day of source departure)",
+                "example": 1
+              },
+              "sequence": {
+                "type": "integer",
+                "example": 1
+              }
+            }
+          },
+          "to": {
+            "type": "object",
+            "required": [
+              "day",
+              "sequence"
+            ],
+            "properties": {
+              "arrival": {
+                "type": "string",
+                "description": "Scheduled arrival HH:MM",
+                "example": "07:55",
+                "nullable": true
+              },
+              "day": {
+                "type": "integer",
+                "example": 1
+              },
+              "sequence": {
+                "type": "integer",
+                "example": 11
+              }
+            }
+          },
+          "distance": {
+            "type": "number",
+            "description": "km between from and to stations",
+            "example": 62.2,
+            "nullable": true
+          },
+          "duration": {
+            "type": "integer",
+            "description": "Journey duration in minutes",
+            "example": 115,
+            "nullable": true
+          },
+          "totalHaltsBetween": {
+            "type": "integer",
+            "description": "Halts between from and to (excluding endpoints)",
+            "example": 6
+          },
+          "live": {
+            "description": "Only present when `live=true` is passed. Null when no live data available.",
+            "nullable": true,
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LiveAtStation"
+              },
+              {
+                "$ref": "#/components/schemas/LiveUpcoming"
+              },
+              {
+                "$ref": "#/components/schemas/LiveDeparted"
+              },
+              {
+                "$ref": "#/components/schemas/LiveNotRunning"
+              }
+            ],
+            "discriminator": {
+              "propertyName": "type"
+            }
+          }
+        }
+      },
+      "LiveAtStation": {
+        "type": "object",
+        "required": [
+          "type",
+          "startDate",
+          "expectedDepartureTime",
+          "delayMinutes"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "at-station"
+            ]
+          },
+          "startDate": {
+            "type": "string",
+            "format": "date",
+            "example": "2026-03-14"
+          },
+          "expectedDepartureTime": {
+            "type": "string",
+            "description": "ISO 8601 +05:30",
+            "example": "2026-03-14T11:35:00+05:30"
+          },
+          "delayMinutes": {
+            "type": "integer",
+            "example": 0
+          }
+        }
+      },
+      "LiveUpcoming": {
+        "type": "object",
+        "required": [
+          "type",
+          "startDate",
+          "expectedArrivalTime",
+          "delayMinutes"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "upcoming"
+            ]
+          },
+          "startDate": {
+            "type": "string",
+            "format": "date",
+            "example": "2026-03-14"
+          },
+          "expectedArrivalTime": {
+            "type": "string",
+            "description": "ISO 8601 +05:30",
+            "example": "2026-03-14T11:20:00+05:30"
+          },
+          "delayMinutes": {
+            "type": "integer",
+            "example": 5
+          }
+        }
+      },
+      "LiveDeparted": {
+        "type": "object",
+        "required": [
+          "type",
+          "startDate",
+          "departedAt",
+          "delayMinutes"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "departed"
+            ]
+          },
+          "startDate": {
+            "type": "string",
+            "format": "date",
+            "example": "2026-03-14"
+          },
+          "departedAt": {
+            "type": "string",
+            "description": "ISO 8601 +05:30 — actual departure time",
+            "example": "2026-03-14T06:12:32+05:30"
+          },
+          "delayMinutes": {
+            "type": "integer",
+            "example": 13
+          }
+        }
+      },
+      "LiveNotRunning": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "description": "Train is not running today, cancelled, diverted, or no data available",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "not-running",
+              "cancelled",
+              "diverted",
+              "partially-cancelled"
+            ]
+          },
+          "startDate": {
+            "type": "string",
+            "format": "date",
+            "nullable": true,
+            "example": "2026-03-14"
+          }
+        }
+      },
+      "StationBoardEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/StationBoardData"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "StationBoardData": {
+        "type": "object",
+        "required": [
+          "station",
+          "count",
+          "includeIntermediate",
+          "trains"
+        ],
+        "properties": {
+          "station": {
+            "$ref": "#/components/schemas/StationRef"
+          },
+          "count": {
+            "type": "integer",
+            "example": 42
+          },
+          "includeIntermediate": {
+            "type": "boolean",
+            "example": false
+          },
+          "trains": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StationBoardTrain"
+            }
+          }
+        }
+      },
+      "StationBoardTrain": {
+        "type": "object",
+        "required": [
+          "train",
+          "stop"
+        ],
+        "properties": {
+          "train": {
+            "type": "object",
+            "required": [
+              "number",
+              "name",
+              "source",
+              "destination",
+              "runDays"
+            ],
+            "properties": {
+              "number": {
+                "type": "string",
+                "example": "12919"
+              },
+              "name": {
+                "type": "string",
+                "example": "Malwa SF Express"
+              },
+              "type": {
+                "type": "string",
+                "nullable": true
+              },
+              "source": {
+                "$ref": "#/components/schemas/StationRef"
+              },
+              "destination": {
+                "$ref": "#/components/schemas/StationRef"
+              },
+              "runDays": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "stop": {
+            "type": "object",
+            "required": [
+              "sequence",
+              "stopType"
+            ],
+            "properties": {
+              "sequence": {
+                "type": "integer",
+                "example": 12
+              },
+              "arrival": {
+                "type": "string",
+                "description": "Scheduled arrival HH:MM",
+                "nullable": true
+              },
+              "departure": {
+                "type": "string",
+                "description": "Scheduled departure HH:MM",
+                "nullable": true
+              },
+              "arrivalDay": {
+                "type": "integer",
+                "description": "Journey day for arrival",
+                "nullable": true
+              },
+              "departureDay": {
+                "type": "integer",
+                "description": "Journey day for departure",
+                "nullable": true
+              },
+              "distance": {
+                "type": "number",
+                "description": "km from source station",
+                "nullable": true
+              },
+              "stopType": {
+                "type": "string",
+                "enum": [
+                  "origin",
+                  "destination",
+                  "halt",
+                  "pass-through"
+                ],
+                "example": "halt"
+              }
+            }
+          }
+        }
+      },
+      "StationLiveEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/StationLiveData"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "StationLiveData": {
+        "type": "object",
+        "required": [
+          "station",
+          "window",
+          "count",
+          "trains"
+        ],
+        "properties": {
+          "station": {
+            "$ref": "#/components/schemas/StationRef"
+          },
+          "window": {
+            "type": "object",
+            "description": "IST time window used for the query",
+            "required": [
+              "from",
+              "to",
+              "hoursBack",
+              "hoursAhead"
+            ],
+            "properties": {
+              "from": {
+                "type": "string",
+                "description": "Window start HH:MM",
+                "example": "07:54"
+              },
+              "to": {
+                "type": "string",
+                "description": "Window end HH:MM",
+                "example": "15:54"
+              },
+              "hoursBack": {
+                "type": "integer",
+                "example": 4
+              },
+              "hoursAhead": {
+                "type": "integer",
+                "example": 4
+              }
+            }
+          },
+          "count": {
+            "type": "integer",
+            "example": 12
+          },
+          "trains": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StationLiveTrain"
+            }
+          }
+        }
+      },
+      "StationLiveTrain": {
+        "type": "object",
+        "required": [
+          "train",
+          "stop",
+          "live"
+        ],
+        "properties": {
+          "train": {
+            "type": "object",
+            "required": [
+              "number",
+              "name",
+              "source",
+              "destination",
+              "runDays"
+            ],
+            "properties": {
+              "number": {
+                "type": "string",
+                "example": "12919"
+              },
+              "name": {
+                "type": "string",
+                "example": "Malwa SF Express"
+              },
+              "type": {
+                "type": "string",
+                "nullable": true
+              },
+              "source": {
+                "type": "string",
+                "description": "Source station code",
+                "example": "SVDK"
+              },
+              "destination": {
+                "type": "string",
+                "description": "Destination station code",
+                "example": "DADN"
+              },
+              "runDays": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "stop": {
+            "type": "object",
+            "required": [
+              "sequence",
+              "day"
+            ],
+            "properties": {
+              "sequence": {
+                "type": "integer",
+                "example": 235
+              },
+              "arrival": {
+                "type": "string",
+                "description": "Scheduled arrival HH:MM",
+                "example": "11:20",
+                "nullable": true
+              },
+              "departure": {
+                "type": "string",
+                "description": "Scheduled departure HH:MM",
+                "example": "11:35",
+                "nullable": true
+              },
+              "day": {
+                "type": "integer",
+                "description": "Journey day number at this station",
+                "example": 2
+              },
+              "distance": {
+                "type": "number",
+                "nullable": true,
+                "example": 1539.8
+              }
+            }
+          },
+          "live": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StationLiveAtStation"
+              },
+              {
+                "$ref": "#/components/schemas/StationLiveUpcoming"
+              },
+              {
+                "$ref": "#/components/schemas/StationLiveDeparted"
+              },
+              {
+                "$ref": "#/components/schemas/StationLiveScheduled"
+              }
+            ],
+            "discriminator": {
+              "propertyName": "type"
+            }
+          }
+        }
+      },
+      "StationLiveAtStation": {
+        "type": "object",
+        "required": [
+          "type",
+          "startDate",
+          "expectedDepartureTime",
+          "delayMinutes"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "at-station"
+            ]
+          },
+          "startDate": {
+            "type": "string",
+            "format": "date",
+            "example": "2026-03-13"
+          },
+          "expectedDepartureTime": {
+            "type": "string",
+            "description": "ISO 8601 +05:30",
+            "example": "2026-03-14T11:35:00+05:30"
+          },
+          "delayMinutes": {
+            "type": "integer",
+            "example": 0
+          }
+        }
+      },
+      "StationLiveUpcoming": {
+        "type": "object",
+        "required": [
+          "type",
+          "startDate",
+          "expectedArrivalTime",
+          "delayMinutes"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "upcoming"
+            ]
+          },
+          "startDate": {
+            "type": "string",
+            "format": "date",
+            "example": "2026-03-14"
+          },
+          "expectedArrivalTime": {
+            "type": "string",
+            "description": "ISO 8601 +05:30",
+            "example": "2026-03-14T13:43:00+05:30"
+          },
+          "delayMinutes": {
+            "type": "integer",
+            "example": 12
+          }
+        }
+      },
+      "StationLiveDeparted": {
+        "type": "object",
+        "required": [
+          "type",
+          "startDate",
+          "departedAt",
+          "delayMinutes"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "departed"
+            ]
+          },
+          "startDate": {
+            "type": "string",
+            "format": "date",
+            "example": "2026-03-14"
+          },
+          "departedAt": {
+            "type": "string",
+            "description": "ISO 8601 +05:30",
+            "example": "2026-03-14T06:12:32+05:30"
+          },
+          "delayMinutes": {
+            "type": "integer",
+            "example": 5
+          }
+        }
+      },
+      "StationLiveScheduled": {
+        "type": "object",
+        "required": [
+          "type",
+          "startDate"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "scheduled"
+            ]
+          },
+          "startDate": {
+            "type": "string",
+            "format": "date",
+            "example": "2026-03-14"
+          }
+        }
+      },
+      "LiveMapEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiveTrainPosition"
+            }
+          },
+          "meta": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Meta"
+              },
+              {
+                "type": "object",
+                "description": "Enhanced metadata for live map",
+                "properties": {
+                  "total": {
+                    "type": "integer",
+                    "description": "Total trains in the system",
+                    "example": 150
+                  },
+                  "live": {
+                    "type": "integer",
+                    "description": "Number of trains with live data records",
+                    "example": 120
+                  },
+                  "coverage": {
+                    "type": "string",
+                    "description": "Coverage percentage",
+                    "example": "80.0%"
+                  },
+                  "performance": {
+                    "type": "object",
+                    "properties": {
+                      "dbQueryTimeMs": {
+                        "type": "number",
+                        "example": 45
+                      },
+                      "externalDataFetchTimeMs": {
+                        "type": "number",
+                        "example": 320
+                      },
+                      "processingTimeMs": {
+                        "type": "number",
+                        "example": 15
+                      },
+                      "totalTimeMs": {
+                        "type": "number",
+                        "example": 380
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "LiveTrainPosition": {
+        "type": "object",
+        "required": [
+          "trainNumber",
+          "trainName",
+          "trainType",
+          "minsSinceDep",
+          "currentStation",
+          "currentStationName",
+          "currentLat",
+          "currentLng",
+          "departureMinutes",
+          "currentDay",
+          "nextStation",
+          "nextStationName",
+          "nextLat",
+          "nextLng",
+          "nextArrivalMinutes",
+          "currDistance",
+          "nextDistance"
+        ],
+        "properties": {
+          "trainNumber": {
+            "type": "string",
+            "example": "12919"
+          },
+          "trainName": {
+            "type": "string",
+            "example": "Malwa SF Express"
+          },
+          "trainType": {
+            "type": "string",
+            "example": "Superfast Express"
+          },
+          "minsSinceDep": {
+            "type": "integer",
+            "description": "Minutes since source station departure",
+            "example": 420
+          },
+          "currentStation": {
+            "type": "string",
+            "description": "Last departed station code",
+            "example": "UJN"
+          },
+          "currentStationName": {
+            "type": "string",
+            "example": "Ujjain Junction"
+          },
+          "currentLat": {
+            "type": "number",
+            "example": 23.1765
+          },
+          "currentLng": {
+            "type": "number",
+            "example": 75.7885
+          },
+          "departureMinutes": {
+            "type": "integer",
+            "description": "Scheduled departure from current station (minutes from midnight)",
+            "example": 695
+          },
+          "currentDay": {
+            "type": "integer",
+            "description": "Journey day number at current station",
+            "example": 2
+          },
+          "nextStation": {
+            "type": "string",
+            "example": "MKAS"
+          },
+          "nextStationName": {
+            "type": "string",
+            "example": "Maksi"
+          },
+          "nextLat": {
+            "type": "number",
+            "example": 23.2612
+          },
+          "nextLng": {
+            "type": "number",
+            "example": 76.1523
+          },
+          "nextArrivalMinutes": {
+            "type": "integer",
+            "description": "Scheduled arrival at next station (minutes from midnight)",
+            "example": 730
+          },
+          "currDistance": {
+            "type": "number",
+            "description": "km from source to current station",
+            "example": 1539.8
+          },
+          "nextDistance": {
+            "type": "number",
+            "description": "km from source to next station",
+            "example": 1578.2
+          }
+        }
+      },
+      "LegacyTrainEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "meta"
+        ],
+        "description": "Legacy train data response envelope. Data structure varies based on dataType parameter.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LegacyStaticData"
+              },
+              {
+                "$ref": "#/components/schemas/LegacyLiveData"
+              },
+              {
+                "$ref": "#/components/schemas/LegacyFullData"
+              }
+            ]
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "LegacyStaticData": {
+        "type": "object",
+        "description": "Returned when dataType=static",
+        "required": [
+          "train",
+          "route",
+          "metadata"
+        ],
+        "properties": {
+          "train": {
+            "$ref": "#/components/schemas/LegacyTrain"
+          },
+          "route": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegacyTrainStop"
+            }
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/LegacyMetadata"
+          }
+        }
+      },
+      "LegacyLiveData": {
+        "type": "object",
+        "description": "Returned when dataType=live",
+        "required": [
+          "trainNumber",
+          "journeyDate",
+          "lastUpdatedAt"
+        ],
+        "properties": {
+          "trainNumber": {
+            "type": "string",
+            "example": "12919"
+          },
+          "trainName": {
+            "type": "string",
+            "example": "Malwa SF Express"
+          },
+          "journeyDate": {
+            "type": "string",
+            "format": "date",
+            "example": "2026-03-14"
+          },
+          "lastUpdatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-03-14T11:42:00+05:30"
+          },
+          "currentLocation": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "stationCode": {
+                "type": "string",
+                "example": "UJN"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "at-station",
+                  "departed"
+                ],
+                "example": "departed"
+              }
+            }
+          },
+          "overallDelayMinutes": {
+            "type": "integer",
+            "nullable": true,
+            "example": 12
+          },
+          "dataSource": {
+            "type": "string",
+            "example": "external"
+          },
+          "route": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "exceptionInfo": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "type": {
+                "type": "string",
+                "example": "CANCELLED"
+              },
+              "message": {
+                "type": "string",
+                "example": "Train data not available for this date."
+              }
+            }
+          }
+        }
+      },
+      "LegacyFullData": {
+        "type": "object",
+        "description": "Returned when dataType=full (static + live merged)",
+        "required": [
+          "train",
+          "route",
+          "metadata"
+        ],
+        "properties": {
+          "train": {
+            "$ref": "#/components/schemas/LegacyTrain"
+          },
+          "route": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegacyTrainStop"
+            }
+          },
+          "liveData": {
+            "type": "object",
+            "nullable": true,
+            "description": "Present when live data is available",
+            "properties": {
+              "trainNumber": {
+                "type": "string",
+                "example": "12919"
+              },
+              "journeyDate": {
+                "type": "string",
+                "format": "date",
+                "example": "2026-03-14"
+              },
+              "lastUpdatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "example": "2026-03-14T11:42:00+05:30"
+              },
+              "currentLocation": {
+                "type": "object"
+              },
+              "overallDelayMinutes": {
+                "type": "integer",
+                "nullable": true
+              },
+              "dataSource": {
+                "type": "string"
+              },
+              "route": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "exceptionInfo": {
+                "type": "object",
+                "nullable": true
+              }
+            }
+          },
+          "metadata": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LegacyMetadata"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "lastLiveUpdate": {
+                    "type": "string",
+                    "format": "date-time",
+                    "nullable": true
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "LegacyTrain": {
+        "type": "object",
+        "required": [
+          "trainNumber",
+          "trainName",
+          "sourceStationCode",
+          "destinationStationCode",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "trainNumber": {
+            "type": "string",
+            "example": "12919"
+          },
+          "trainName": {
+            "type": "string",
+            "example": "Malwa SF Express"
+          },
+          "type": {
+            "type": "string",
+            "nullable": true,
+            "example": "Superfast Express"
+          },
+          "zone": {
+            "type": "string",
+            "nullable": true,
+            "example": "WR"
+          },
+          "sourceStationCode": {
+            "type": "string",
+            "example": "INDB"
+          },
+          "sourceStationName": {
+            "type": "string",
+            "nullable": true,
+            "example": "Indore Junction"
+          },
+          "destinationStationCode": {
+            "type": "string",
+            "example": "DADN"
+          },
+          "destinationStationName": {
+            "type": "string",
+            "nullable": true,
+            "example": "Dadri"
+          },
+          "runningDaysBitmap": {
+            "type": "integer",
+            "example": 127
+          },
+          "runningDays": {
+            "type": "object",
+            "properties": {
+              "days": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "example": [
+                  "mon",
+                  "tue",
+                  "wed",
+                  "thu",
+                  "fri",
+                  "sat",
+                  "sun"
+                ]
+              },
+              "allDays": {
+                "type": "boolean",
+                "example": true
+              },
+              "isStartingToday": {
+                "type": "boolean",
+                "example": true
+              }
+            }
+          },
+          "returnTrainNumber": {
+            "type": "string",
+            "nullable": true,
+            "example": "12920"
+          },
+          "travelTimeMinutes": {
+            "type": "integer",
+            "nullable": true,
+            "example": 1680
+          },
+          "totalHalts": {
+            "type": "integer",
+            "nullable": true,
+            "example": 42
+          },
+          "distanceKm": {
+            "type": "number",
+            "nullable": true,
+            "example": 1920.4
+          },
+          "avgSpeedKmph": {
+            "type": "number",
+            "nullable": true,
+            "example": 68.6
+          },
+          "createdAt": {
+            "type": "integer",
+            "description": "Unix timestamp in milliseconds",
+            "example": 1710000000000
+          },
+          "updatedAt": {
+            "type": "integer",
+            "description": "Unix timestamp in milliseconds",
+            "example": 1710000000000
+          }
+        }
+      },
+      "LegacyTrainStop": {
+        "type": "object",
+        "required": [
+          "id",
+          "sequence",
+          "stationCode"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "example": 1
+          },
+          "sequence": {
+            "type": "integer",
+            "example": 1
+          },
+          "stationCode": {
+            "type": "string",
+            "example": "INDB"
+          },
+          "stationName": {
+            "type": "string",
+            "nullable": true,
+            "example": "Indore Junction"
+          },
+          "isHalt": {
+            "type": "integer",
+            "description": "1 for halt, 0 for pass-through",
+            "example": 1
+          },
+          "scheduledArrival": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Minutes since midnight",
+            "example": 1260
+          },
+          "scheduledDeparture": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Minutes since midnight",
+            "example": 1260
+          },
+          "haltDurationMinutes": {
+            "type": "integer",
+            "nullable": true,
+            "example": 5
+          },
+          "day": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Journey day number",
+            "example": 1
+          },
+          "distanceFromSourceKm": {
+            "type": "number",
+            "nullable": true,
+            "example": 0
+          },
+          "speedOnSectionKmph": {
+            "type": "number",
+            "nullable": true,
+            "example": 85.5
+          }
+        }
+      },
+      "LegacyMetadata": {
+        "type": "object",
+        "required": [
+          "hasLiveData",
+          "lastStaticUpdate",
+          "canRefreshLive"
+        ],
+        "properties": {
+          "hasLiveData": {
+            "type": "boolean",
+            "example": false
+          },
+          "lastStaticUpdate": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-03-14T10:00:00.000Z"
+          },
+          "canRefreshLive": {
+            "type": "boolean",
+            "example": true
+          }
+        }
+      }
+    }
+  }
+}
