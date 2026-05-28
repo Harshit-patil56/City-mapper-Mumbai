@@ -102,6 +102,38 @@ class LiveTrainEntry {
     );
   }
 
+  /// Parses a single train entry from the static timetable `/stations/{code}/trains` response.
+  factory LiveTrainEntry.fromStationBoardJson(Map<String, dynamic> json) {
+    final train = json['train'] as Map<String, dynamic>;
+    final stop = json['stop'] as Map<String, dynamic>;
+
+    // Source and destination can be objects (StationRef) or strings. Let's support both.
+    final sourceCode = (train['source'] is Map)
+        ? train['source']['code'] as String
+        : train['source'] as String;
+    final destCode = (train['destination'] is Map)
+        ? train['destination']['code'] as String
+        : train['destination'] as String;
+
+    return LiveTrainEntry(
+      trainNumber: train['number'] as String,
+      trainName: train['name'] as String,
+      trainType: train['type'] as String?,
+      sourceStation: sourceCode,
+      destinationStation: destCode,
+      runDays: (train['runDays'] as List<dynamic>?)
+              ?.map((e) => e as String)
+              .toList() ??
+          [],
+      stopSequence: stop['sequence'] as int? ?? 0,
+      scheduledArrival: stop['arrival'] as String?,
+      scheduledDeparture: stop['departure'] as String?,
+      stopDay: stop['departureDay'] as int?,
+      distanceFromSource: (stop['distance'] as num?)?.toDouble(),
+      liveType: 'scheduled', // no live status for static board
+    );
+  }
+
   /// Whether this train is considered "on time" (delay <= 0 or null).
   bool get isOnTime => (delayMinutes ?? 0) <= 0;
 
@@ -282,6 +314,29 @@ class RailGadiApiService {
                     RailGadiTrainStop.fromJson(s as Map<String, dynamic>))
                 .toList();
           }
+        }
+      }
+    } catch (_) {}
+    return [];
+  }
+
+  /// Fetches the static timetable for a station.
+  ///
+  /// Uses `/stations/{code}/trains?includeIntermediate=false` endpoint.
+  /// Returns a list of LiveTrainEntry representing the scheduled trains.
+  Future<List<LiveTrainEntry>> getStationTimetable(String code) async {
+    final uri = Uri.parse('$_baseUrl/stations/$code/trains?includeIntermediate=false');
+    try {
+      final response = await _client.get(uri).timeout(_timeout);
+      if (response.statusCode == 200) {
+        final body = jsonDecode(response.body) as Map<String, dynamic>;
+        final success = body['success'] as bool? ?? false;
+        if (success) {
+          final data = body['data'] as Map<String, dynamic>;
+          final trainsList = data['trains'] as List<dynamic>;
+          return trainsList
+              .map((t) => LiveTrainEntry.fromStationBoardJson(t as Map<String, dynamic>))
+              .toList();
         }
       }
     } catch (_) {}

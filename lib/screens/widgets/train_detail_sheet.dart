@@ -1,24 +1,23 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:latlong2/latlong.dart' hide Path;
 import 'package:lucide_icons/lucide_icons.dart';
+import '../../data/mumbai_stations.dart';
 import '../../services/api_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Citymapper-exact train detail sheet
+// Citymapper-exact Singapore Circle Line MRT Style Train Detail Sheet
 //
 // Layout:
-//   • Green header strip  — train number badge, name, src→dst, status pill
-//   • White body          — vertical stop timeline (green line + dots)
-//   • Footer              — last-updated label, refresh button
-//
-// Data:
-//   • Schedule  → RailGadi /trains/{number}?haltsOnly=true  ✅ confirmed
-//   • Live      → mIndicator irgetrunningstatus (on-device; null-safe fallback)
+//   • Route Map at the Top  — draws polyline + station markers
+//   • Colored line header   — source - destination ∨ (matches Singapore MRT style)
+//   • White body            — route info card + vertical stop timeline
+//                             (thick line color matching line + Singapore active halo dot)
+//   • Footer                — last-updated label, refresh button
 // ─────────────────────────────────────────────────────────────────────────────
 
-const _green    = Color(0xFF19A66E);
-const _greenDk  = Color(0xFF117A52);
 const _bg       = Colors.white;
 const _ink      = Color(0xFF1E293B);   // primary text
 const _inkMid   = Color(0xFF64748B);   // secondary text
@@ -46,19 +45,12 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
   Timer? _refreshTimer;
   Timer? _tickTimer;
 
-  late AnimationController _pulse;
-  late Animation<double>   _pulseAnim;
+  final MapController _mapController = MapController();
   final _scroll = ScrollController();
 
   @override
   void initState() {
     super.initState();
-    _pulse = AnimationController(vsync: this,
-        duration: const Duration(milliseconds: 900))
-      ..repeat(reverse: true);
-    _pulseAnim = Tween<double>(begin: 0.6, end: 1.0)
-        .animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut));
-
     _fetchAll();
     _refreshTimer = Timer.periodic(const Duration(seconds: 60),
         (_) => _fetchLive());
@@ -68,7 +60,6 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
 
   @override
   void dispose() {
-    _pulse.dispose();
     _refreshTimer?.cancel();
     _tickTimer?.cancel();
     _scroll.dispose();
@@ -90,8 +81,10 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
     if (!mounted) return;
     setState(() { _stops = stops; _loadingSchedule = false; });
     if (stops.isNotEmpty) {
-      WidgetsBinding.instance
-          .addPostFrameCallback((_) => _scrollToCurrent());
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _scrollToCurrent();
+        _fitMapToRoute();
+      });
     }
   }
 
@@ -116,11 +109,101 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
         curve: Curves.easeOut);
   }
 
+  void _fitMapToRoute() {
+    if (_stops.isEmpty) return;
+    final points = _stops
+        .map((s) => _getStationLatLng(s.stationCode, s.stationName))
+        .whereType<LatLng>()
+        .toList();
+    if (points.isEmpty) return;
+
+    try {
+      final bounds = LatLngBounds.fromPoints(points);
+      _mapController.fitCamera(CameraFit.bounds(
+        bounds: bounds,
+        padding: const EdgeInsets.all(24),
+      ));
+    } catch (_) {}
+  }
+
   // ── Helpers ───────────────────────────────────────────────
 
-  /// Index of the "current" stop based on wall clock vs schedule.
+  /// Resolve train line
+  TrainLine get _line {
+    if (_stops.isNotEmpty) {
+      for (final stop in _stops) {
+        for (final station in MumbaiStationData.allStations) {
+          if (station.code.toUpperCase() == stop.stationCode.toUpperCase()) {
+            return station.line;
+          }
+        }
+      }
+    }
+    if (widget.train.trainNumber.startsWith('9')) return TrainLine.western;
+    return TrainLine.central;
+  }
+
+  LatLng? _getStationLatLng(String code, String name) {
+    final cleanCode = code.trim().toUpperCase();
+    final cleanName = name.trim().toUpperCase();
+    for (final station in MumbaiStationData.allStations) {
+      if (station.code.toUpperCase() == cleanCode ||
+          station.name.toUpperCase() == cleanName) {
+        return LatLng(station.lat, station.lng);
+      }
+    }
+    return null;
+  }
+
+  List<TrainLine> _getInterchangeLines(String stationName) {
+    final cleanName = stationName.trim().toUpperCase();
+    final lines = <TrainLine>{};
+    for (final station in MumbaiStationData.allStations) {
+      if (station.name.toUpperCase() == cleanName) {
+        lines.add(station.line);
+      }
+    }
+    lines.remove(_line);
+    return lines.toList();
+  }
+
+  /// Whether the train has not started yet
+  bool get _isNotStarted {
+    if (_live != null) {
+      if (_live!.currentStation == null && _live!.nextStation == null) {
+        return true;
+      }
+    }
+    if (_stops.isNotEmpty) {
+      final first = _stops.first;
+      final raw = first.departure ?? first.arrival;
+      if (raw != null) {
+        final now = TimeOfDay.now();
+        final parts = raw.split(':');
+        if (parts.length >= 2) {
+          final h = int.tryParse(parts[0]) ?? 0;
+          final m = int.tryParse(parts[1]) ?? 0;
+          if (now.hour < h || (now.hour == h && now.minute < m)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  /// Index of the "current" stop based on wall clock vs schedule or live status.
   int get _currentIdx {
     if (_stops.isEmpty) return 0;
+    if (_isNotStarted) return 0; // highlight the first station if not started yet
+
+    if (_live?.currentStation != null) {
+      final idx = _stops.indexWhere((s) =>
+          s.stationName.toUpperCase() == _live!.currentStation!.toUpperCase() ||
+          s.stationCode.toUpperCase() == _live!.currentStation!.toUpperCase());
+      if (idx != -1) return idx;
+    }
+
     final now = TimeOfDay.now();
     int best = 0;
     for (int i = 0; i < _stops.length; i++) {
@@ -145,6 +228,9 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
   // ── Status for the header pill ────────────────────────────
 
   ({String label, Color bg}) get _statusChip {
+    if (_isNotStarted) {
+      return (label: 'NOT STARTED', bg: const Color(0xFF475569));
+    }
     if (_live != null) {
       if (_live!.isCancelled) {
         return (label: 'CANCELLED', bg: const Color(0xFFDC2626));
@@ -157,7 +243,7 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
         return (label: 'DELAYED ${_live!.delay} MIN',
                 bg: const Color(0xFFD97706));
       }
-      return (label: 'RUNNING', bg: _greenDk);
+      return (label: 'RUNNING', bg: const Color(0xFF16A34A));
     }
     // RailGadi-derived
     return switch (widget.train.liveType) {
@@ -179,7 +265,8 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
       ),
       child: Column(
         children: [
-          _buildHeader(),
+          _buildMapHeader(),
+          _buildColoredHeaderStrip(),
           Expanded(child: _buildBody()),
           _buildFooter(),
         ],
@@ -187,159 +274,155 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
     );
   }
 
-  // ── Green header strip ────────────────────────────────────
+  // ── Route Map at the Top ──────────────────────────────────
 
-  Widget _buildHeader() {
-    final chip = _statusChip;
+  Widget _buildMapHeader() {
+    final routePoints = _stops
+        .map((s) => _getStationLatLng(s.stationCode, s.stationName))
+        .whereType<LatLng>()
+        .toList();
 
-    return Container(
-      color: _green,
-      padding: const EdgeInsets.fromLTRB(16, 16, 8, 14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return SizedBox(
+      height: 220,
+      child: Stack(
         children: [
-          // Row 1: badge + name + close
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              // Train-number badge
-              Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 9, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.22),
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.35)),
-                ),
-                child: Text(widget.train.trainNumber,
-                    style: GoogleFonts.outfit(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                        color: Colors.white,
-                        letterSpacing: 0.5)),
+          FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+              initialCenter: const LatLng(19.0760, 72.8777),
+              initialZoom: 11.5,
+              interactionOptions: const InteractionOptions(
+                flags: InteractiveFlag.all,
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  widget.train.trainName,
-                  style: GoogleFonts.outfit(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.white),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              IconButton(
-                icon: const Icon(LucideIcons.x,
-                    size: 20, color: Colors.white70),
-                padding: EdgeInsets.zero,
-                onPressed: () => Navigator.of(context).pop(),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 4),
-
-          // Row 2: src → dst
-          Row(
-            children: [
-              Flexible(
-                child: Text(widget.train.sourceStation,
-                    style: GoogleFonts.outfit(
-                        fontSize: 12,
-                        color: Colors.white.withValues(alpha: 0.8)),
-                    overflow: TextOverflow.ellipsis),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6),
-                child: Icon(Icons.arrow_forward,
-                    size: 12,
-                    color: Colors.white.withValues(alpha: 0.6)),
-              ),
-              Expanded(
-                child: Text(widget.train.destinationStation,
-                    style: GoogleFonts.outfit(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white),
-                    overflow: TextOverflow.ellipsis),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 10),
-
-          // Row 3: status pill + live dot
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: chip.bg,
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text(chip.label,
-                    style: GoogleFonts.outfit(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
-                        letterSpacing: 0.4)),
-              ),
-              if (_live != null && !_live!.isCancelled) ...[
-                const SizedBox(width: 8),
-                const _LivePill(),
-              ],
-              if (_live?.platform != null &&
-                  _live!.platform!.isNotEmpty) ...[
-                const SizedBox(width: 8),
-                _HeaderChip(
-                    icon: LucideIcons.layoutTemplate,
-                    label: 'Pf ${_live!.platform}'),
-              ],
-              if ((_live?.speed ?? 0) > 0) ...[
-                const SizedBox(width: 6),
-                _HeaderChip(
-                    icon: LucideIcons.zap,
-                    label: '${_live!.speed} km/h'),
-              ],
-            ],
-          ),
-
-          // Live current station
-          if (_live?.currentStation != null) ...[
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                const Icon(LucideIcons.mapPin,
-                    size: 13, color: Colors.white70),
-                const SizedBox(width: 5),
-                Expanded(
-                  child: Text(
-                    'At ${_live!.currentStation!}'
-                    '${_live!.nextStation != null ? '  →  ${_live!.nextStation}' : ''}',
-                    style: GoogleFonts.outfit(
-                        fontSize: 12,
-                        color: Colors.white.withValues(alpha: 0.9)),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
             ),
-          ],
+            children: [
+              TileLayer(
+                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'com.quntanix.citymappermumbai',
+              ),
+              if (routePoints.isNotEmpty) ...[
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: routePoints,
+                      color: _line.color,
+                      strokeWidth: 5.0,
+                    ),
+                  ],
+                ),
+                MarkerLayer(
+                  markers: _stops.map((stop) {
+                    final latLng = _getStationLatLng(stop.stationCode, stop.stationName);
+                    if (latLng == null) return null;
+
+                    final isCur = _stops.indexOf(stop) == _currentIdx;
+
+                    return Marker(
+                      point: latLng,
+                      width: isCur ? 24 : 12,
+                      height: isCur ? 24 : 12,
+                      child: isCur
+                          ? Container(
+                              decoration: const BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Color(0x3D2F80ED), // 24% opacity blue halo
+                              ),
+                              child: Center(
+                                child: Container(
+                                  width: 10,
+                                  height: 10,
+                                  decoration: const BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: Color(0xFF2F80ED), // active blue dot
+                                  ),
+                                ),
+                              ),
+                            )
+                          : Container(
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.white,
+                                border: Border.all(
+                                  color: _line.color,
+                                  width: 2.5,
+                                ),
+                              ),
+                            ),
+                    );
+                  }).whereType<Marker>().toList(),
+                ),
+              ],
+            ],
+          ),
+          // Floating close button
+          Positioned(
+            top: 12,
+            right: 12,
+            child: Container(
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black12,
+                    blurRadius: 4,
+                    offset: Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: IconButton(
+                icon: const Icon(LucideIcons.x, size: 16, color: Colors.black87),
+                onPressed: () => Navigator.of(context).pop(),
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                padding: EdgeInsets.zero,
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  // ── White body (timeline) ─────────────────────────────────
+  // ── Colored header strip (Singapore MRT style) ────────────
+
+  Widget _buildColoredHeaderStrip() {
+    return Container(
+      color: _line.color,
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Expanded(
+            child: Text(
+              '${widget.train.sourceStation} · ${widget.train.destinationStation}',
+              style: GoogleFonts.outfit(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+              ),
+              textAlign: TextAlign.center,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: 6),
+          const Icon(
+            LucideIcons.chevronDown,
+            size: 16,
+            color: Colors.white,
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Timeline body ─────────────────────────────────────────
 
   Widget _buildBody() {
     if (_loadingSchedule) {
       return const Center(
           child: CircularProgressIndicator(
-              valueColor: AlwaysStoppedAnimation<Color>(_green),
+              valueColor: AlwaysStoppedAnimation<Color>(_inkMid),
               strokeWidth: 2));
     }
 
@@ -374,23 +457,102 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
 
     final cur = _currentIdx;
 
-    return ListView.builder(
-      controller: _scroll,
-      padding: const EdgeInsets.fromLTRB(20, 12, 16, 12),
-      itemCount: _stops.length,
-      itemBuilder: (ctx, i) => _stopRow(_stops, i, cur),
+    return Column(
+      children: [
+        _buildRouteInfoCard(),
+        const Divider(height: 1, color: Color(0xFFF1F5F9)),
+        Expanded(
+          child: ListView.builder(
+            controller: _scroll,
+            padding: const EdgeInsets.fromLTRB(20, 16, 16, 16),
+            itemCount: _stops.length,
+            itemBuilder: (ctx, i) => _stopRow(_stops, i, cur),
+          ),
+        ),
+      ],
     );
   }
 
-  // ── Individual stop row (Citymapper-exact) ────────────────
-  //
-  // Layout:
-  //
-  //   [dot]   Station Name                    09:24
-  //    │      Platform 3 ←(small chip)
-  //
-  // The vertical green line is drawn by stacking a 2px-wide
-  // container above and below the dot.
+  Widget _buildRouteInfoCard() {
+    final chip = _statusChip;
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              // Train number badge
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+                decoration: BoxDecoration(
+                  color: _line.color.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: _line.color.withValues(alpha: 0.3)),
+                ),
+                child: Text(
+                  widget.train.trainNumber,
+                  style: GoogleFonts.outfit(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    color: _line.color,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  widget.train.trainName,
+                  style: GoogleFonts.outfit(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: _ink,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4.5),
+                decoration: BoxDecoration(
+                  color: chip.bg,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  chip.label,
+                  style: GoogleFonts.outfit(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                    letterSpacing: 0.4,
+                  ),
+                ),
+              ),
+              if (_live != null && !_live!.isCancelled) ...[
+                const SizedBox(width: 8),
+                _LiveLabel(lineColor: _line.color),
+              ],
+              if (_live?.platform != null && _live!.platform!.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                _InfoChip(icon: LucideIcons.layoutTemplate, label: 'Pf ${_live!.platform}', lineColor: _line.color),
+              ],
+              if ((_live?.speed ?? 0) > 0) ...[
+                const SizedBox(width: 6),
+                _InfoChip(icon: LucideIcons.zap, label: '${_live!.speed} km/h', lineColor: _line.color),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Individual stop row (Singapore MRT style) ────────────
 
   Widget _stopRow(List<RailGadiTrainStop> stops, int i, int cur) {
     final stop    = stops[i];
@@ -399,17 +561,12 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
     final isCur   = i == cur;
     final isPast  = i < cur;
 
-    // Time string
     final time = isFirst
         ? (stop.departure ?? '')
         : isLast
             ? (stop.arrival ?? '')
             : (stop.arrival ?? stop.departure ?? '');
 
-    // Dot styling
-    final double dotR = isCur ? 7 : 5;
-
-    // Text colours
     final Color nameColor = isCur
         ? _ink
         : isPast
@@ -417,126 +574,103 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
             : _ink;
     final FontWeight nameWeight =
         isCur ? FontWeight.w700 : FontWeight.w500;
-    final Color timeColor = isCur ? _green : _inkMid;
+    final Color timeColor = isCur ? const Color(0xFF2F80ED) : _inkMid;
 
-    // Line colours
-    final Color lineColorTop  = isPast ? _inkFaint : _green;
-    final Color lineColorBot  = (i >= cur) ? _green : _inkFaint;
+    final interchangeLines = _getInterchangeLines(stop.stationName);
 
     return IntrinsicHeight(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // ── Timeline column (28 px wide)
-          SizedBox(
-            width: 28,
-            child: Column(
-              children: [
-                // Top segment
-                if (!isFirst)
-                  Expanded(
-                    child: Center(
-                      child: Container(width: 2, color: lineColorTop),
-                    ),
-                  )
-                else
-                  const SizedBox(height: 6),
-
-                // Dot
-                isCur
-                    ? AnimatedBuilder(
-                        animation: _pulseAnim,
-                        builder: (ctx, child) => Container(
-                          width: dotR * 2 * _pulseAnim.value,
-                          height: dotR * 2 * _pulseAnim.value,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: _green,
-                            boxShadow: [
-                              BoxShadow(
-                                  color: _green.withValues(alpha: 0.4),
-                                  blurRadius: 8,
-                                  spreadRadius: 2),
-                            ],
-                          ),
-                        ),
-                      )
-                    : Container(
-                        width: dotR * 2,
-                        height: dotR * 2,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: isPast ? _inkFaint : _bg,
-                          border: isPast
-                              ? null
-                              : Border.all(color: _green, width: 2),
-                        ),
-                      ),
-
-                // Bottom segment
-                if (!isLast)
-                  Expanded(
-                    child: Center(
-                      child: Container(width: 2, color: lineColorBot),
-                    ),
-                  )
-                else
-                  const SizedBox(height: 6),
-              ],
+          // Timeline column with custom painter for ticks, vertical line and active dot
+          CustomPaint(
+            size: const Size(32, 0),
+            painter: TimelinePainter(
+              lineColor: _line.color,
+              pastColor: _inkFaint,
+              isFirst: isFirst,
+              isLast: isLast,
+              isCur: isCur,
+              isPast: isPast,
             ),
           ),
 
-          // ── Content column
+          // Content column
           Expanded(
-            child: Padding(
-              padding:
-                  EdgeInsets.symmetric(vertical: isCur ? 10 : 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          stop.stationName.isNotEmpty
-                              ? stop.stationName
-                              : stop.stationCode,
-                          style: GoogleFonts.outfit(
-                            fontSize: isCur ? 15 : 14,
-                            fontWeight: nameWeight,
-                            color: nameColor,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              stop.stationName.isNotEmpty
+                                  ? stop.stationName
+                                  : stop.stationCode,
+                              style: GoogleFonts.outfit(
+                                fontSize: isCur ? 15 : 14,
+                                fontWeight: nameWeight,
+                                color: nameColor,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                          // Connection badges (like Paya Lebar EW badge in screenshot)
+                          if (interchangeLines.isNotEmpty) ...[
+                            const SizedBox(width: 8),
+                            ...interchangeLines.map((line) => Container(
+                              margin: const EdgeInsets.only(right: 4),
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                              decoration: BoxDecoration(
+                                color: line.color,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                line.shortCode,
+                                style: GoogleFonts.outfit(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w800,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            )),
+                          ],
+                        ],
                       ),
-                      if (time.isNotEmpty) ...[
-                        const SizedBox(width: 8),
-                        Text(time,
-                            style: GoogleFonts.outfit(
-                                fontSize: 13,
-                                fontWeight: isCur
-                                    ? FontWeight.w700
-                                    : FontWeight.w400,
-                                color: timeColor,
-                                fontFeatures: const [
-                                  FontFeature.tabularFigures()
-                                ])),
-                      ],
-                    ],
-                  ),
-                  // Delay badge (from live data if available)
-                  if (isCur && (_live?.delay ?? 0) > 0) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      '${_live!.delay} min late',
-                      style: GoogleFonts.outfit(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: const Color(0xFFD97706)),
                     ),
+                    if (time.isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      Text(time,
+                          style: GoogleFonts.outfit(
+                              fontSize: 13,
+                              fontWeight: isCur
+                                  ? FontWeight.w700
+                                  : FontWeight.w400,
+                              color: timeColor,
+                              fontFeatures: const [
+                                FontFeature.tabularFigures()
+                              ])),
+                    ],
                   ],
+                ),
+                if (isCur && (_live?.delay ?? 0) > 0) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    '${_live!.delay} min late',
+                    style: GoogleFonts.outfit(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFFD97706)),
+                  ),
                 ],
-              ),
+                const SizedBox(height: 14),
+                // Divider line below the station (only right of timeline)
+                const Divider(height: 1, thickness: 1, color: Color(0xFFE2E8F0)),
+              ],
             ),
           ),
         ],
@@ -573,13 +707,13 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
           TextButton.icon(
             onPressed:
                 (_loadingSchedule || _loadingLive) ? null : _fetchAll,
-            icon: const Icon(LucideIcons.refreshCw,
-                size: 13, color: _green),
+            icon: Icon(LucideIcons.refreshCw,
+                size: 13, color: _line.color),
             label: Text('Refresh',
                 style: GoogleFonts.outfit(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
-                    color: _green)),
+                    color: _line.color)),
             style: TextButton.styleFrom(
               padding: const EdgeInsets.symmetric(
                   horizontal: 10, vertical: 6),
@@ -592,17 +726,17 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Small reusable widgets
+// Small UI helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Pulsing "LIVE" pill shown in the header.
-class _LivePill extends StatefulWidget {
-  const _LivePill();
+class _LiveLabel extends StatefulWidget {
+  final Color lineColor;
+  const _LiveLabel({required this.lineColor});
   @override
-  State<_LivePill> createState() => _LivePillState();
+  State<_LiveLabel> createState() => _LiveLabelState();
 }
 
-class _LivePillState extends State<_LivePill>
+class _LiveLabelState extends State<_LiveLabel>
     with SingleTickerProviderStateMixin {
   late AnimationController _c;
   late Animation<double> _a;
@@ -631,7 +765,7 @@ class _LivePillState extends State<_LivePill>
             width: 7, height: 7,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: Colors.white.withValues(alpha: _a.value),
+              color: widget.lineColor.withValues(alpha: _a.value),
             ),
           ),
         ),
@@ -640,41 +774,125 @@ class _LivePillState extends State<_LivePill>
             style: GoogleFonts.outfit(
                 fontSize: 10,
                 fontWeight: FontWeight.w800,
-                color: Colors.white.withValues(alpha: 0.85),
+                color: widget.lineColor.withValues(alpha: 0.85),
                 letterSpacing: 1.0)),
       ],
     );
   }
 }
 
-/// Small translucent chip in the green header for platform/speed.
-class _HeaderChip extends StatelessWidget {
+class _InfoChip extends StatelessWidget {
   final IconData icon;
   final String label;
-  const _HeaderChip({required this.icon, required this.label});
+  final Color lineColor;
+  const _InfoChip({required this.icon, required this.label, required this.lineColor});
 
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.18),
+        color: lineColor.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-            color: Colors.white.withValues(alpha: 0.3)),
+            color: lineColor.withValues(alpha: 0.25)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 11, color: Colors.white70),
+          Icon(icon, size: 11, color: lineColor),
           const SizedBox(width: 4),
           Text(label,
               style: GoogleFonts.outfit(
-                  fontSize: 11,
+                  fontSize: 10,
                   fontWeight: FontWeight.w600,
-                  color: Colors.white)),
+                  color: lineColor)),
         ],
       ),
     );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Timeline Painter matching Singapore Circle Line MRT Style
+// ─────────────────────────────────────────────────────────────────────────────
+
+class TimelinePainter extends CustomPainter {
+  final Color lineColor;
+  final Color pastColor;
+  final bool isFirst;
+  final bool isLast;
+  final bool isCur;
+  final bool isPast;
+
+  TimelinePainter({
+    required this.lineColor,
+    required this.pastColor,
+    required this.isFirst,
+    required this.isLast,
+    required this.isCur,
+    required this.isPast,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double centerX = size.width / 2;
+    final double centerY = 24.0; // Fixed vertical height for ticks and active dot
+    final double lineThickness = 5.0;
+
+    // Draw top line segment (if not the first station)
+    if (!isFirst) {
+      final paint = Paint()
+        ..color = isPast ? pastColor : lineColor
+        ..strokeWidth = lineThickness
+        ..style = PaintingStyle.stroke;
+      canvas.drawLine(Offset(centerX, 0), Offset(centerX, centerY), paint);
+    }
+
+    // Draw bottom line segment (if not the last station)
+    if (!isLast) {
+      final paint = Paint()
+        ..color = (isPast && !isCur) ? pastColor : lineColor
+        ..strokeWidth = lineThickness
+        ..style = PaintingStyle.stroke;
+      canvas.drawLine(Offset(centerX, centerY), Offset(centerX, size.height), paint);
+    }
+
+    // Draw tick or active dot
+    if (isCur) {
+      // 24% opacity blue halo
+      final haloPaint = Paint()
+        ..color = const Color(0x3D2F80ED)
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(Offset(centerX, centerY), 10.0, haloPaint);
+
+      // Solid blue center dot
+      final dotPaint = Paint()
+        ..color = const Color(0xFF2F80ED)
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(Offset(centerX, centerY), 5.0, dotPaint);
+    } else {
+      // Draw horizontal tick sticking to the right (length 6, thickness 3.5)
+      final tickPaint = Paint()
+        ..color = isPast ? pastColor : lineColor
+        ..strokeWidth = 3.5
+        ..strokeCap = StrokeCap.round;
+      
+      canvas.drawLine(
+        Offset(centerX, centerY),
+        Offset(centerX + 6.0, centerY),
+        tickPaint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant TimelinePainter oldDelegate) {
+    return oldDelegate.lineColor != lineColor ||
+        oldDelegate.pastColor != pastColor ||
+        oldDelegate.isFirst != isFirst ||
+        oldDelegate.isLast != isLast ||
+        oldDelegate.isCur != isCur ||
+        oldDelegate.isPast != isPast;
   }
 }

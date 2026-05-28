@@ -59,6 +59,11 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
   String? _departuresError;
   Timer? _departuresRefreshTimer;
 
+  bool _isTimetableMode = false;
+  List<LiveTrainEntry> _selectedStationTimetable = [];
+  bool _isLoadingTimetable = false;
+  String? _timetableError;
+
   // mIndicator disruption data for the selected station
   List<MIndicatorAlert> _stationAlerts = [];
   List<MIndicatorCancelledTrain> _cancelledTrains = [];
@@ -140,6 +145,10 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
     setState(() {
       _selectedStation = station;
       _selectedStationDepartures = [];
+      _isTimetableMode = false;
+      _selectedStationTimetable = [];
+      _isLoadingTimetable = false;
+      _timetableError = null;
     });
     
     // Zoom and center map to selected station
@@ -180,6 +189,31 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
       setState(() {
         _departuresError = e.toString();
         _isLoadingDepartures = false;
+      });
+    }
+  }
+
+  Future<void> _fetchSelectedStationTimetable() async {
+    final station = _selectedStation;
+    if (station == null) return;
+
+    setState(() {
+      _isLoadingTimetable = true;
+      _timetableError = null;
+    });
+
+    try {
+      final response = await _apiService.getStationTimetable(station.code);
+      if (_selectedStation?.code != station.code) return; // stale request
+      setState(() {
+        _selectedStationTimetable = response;
+        _isLoadingTimetable = false;
+      });
+    } catch (e) {
+      if (_selectedStation?.code != station.code) return; // stale request
+      setState(() {
+        _timetableError = e.toString();
+        _isLoadingTimetable = false;
       });
     }
   }
@@ -1315,6 +1349,10 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
                       _selectedStation = null;
                       _selectedStationDepartures = [];
                       _departuresRefreshTimer?.cancel();
+                      _isTimetableMode = false;
+                      _selectedStationTimetable = [];
+                      _isLoadingTimetable = false;
+                      _timetableError = null;
                     });
                     _mapController.move(_effectivePosition, 13.0);
                   },
@@ -1336,33 +1374,53 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
             child: Row(
               children: [
                 Expanded(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Center(
-                      child: Text(
-                        'Now',
-                        style: GoogleFonts.outfit(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: const Color(0xFF11754D),
+                  child: GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        _isTimetableMode = false;
+                      });
+                    },
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: !_isTimetableMode ? Colors.white : Colors.transparent,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Center(
+                        child: Text(
+                          'Now',
+                          style: GoogleFonts.outfit(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: !_isTimetableMode ? const Color(0xFF11754D) : Colors.white.withValues(alpha: 0.8),
+                          ),
                         ),
                       ),
                     ),
                   ),
                 ),
                 Expanded(
-                  child: Container(
-                    color: Colors.transparent,
-                    child: Center(
-                      child: Text(
-                        'Timetable',
-                        style: GoogleFonts.outfit(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white.withValues(alpha: 0.8),
+                  child: GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        _isTimetableMode = true;
+                      });
+                      if (_selectedStationTimetable.isEmpty) {
+                        _fetchSelectedStationTimetable();
+                      }
+                    },
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: _isTimetableMode ? Colors.white : Colors.transparent,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Center(
+                        child: Text(
+                          'Timetable',
+                          style: GoogleFonts.outfit(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: _isTimetableMode ? const Color(0xFF11754D) : Colors.white.withValues(alpha: 0.8),
+                          ),
                         ),
                       ),
                     ),
@@ -1373,76 +1431,92 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
           ),
         ),
 
-        // 3. Departures List
+        // 3. Departures List / Timetable List
         Expanded(
           child: Container(
             color: const Color(0xFF19A66E), // Match parent green background
-            child: RefreshIndicator(
-              onRefresh: _fetchSelectedStationDepartures,
-              color: const Color(0xFF19A66E),
-              backgroundColor: Colors.white,
-              child: ListView(
-                controller: scrollController,
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-                children: [
-                  if (_isLoadingDepartures && _selectedStationDepartures.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 40),
-                      child: Center(
-                        child: CircularProgressIndicator(
-                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                        ),
-                      ),
-                    )
-                  else if (_departuresError != null && _selectedStationDepartures.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 40),
-                      child: Center(
-                        child: Column(
-                          children: [
-                            const Icon(LucideIcons.wifiOff, color: Colors.white70, size: 36),
-                            const SizedBox(height: 12),
-                            Text(
-                              'Failed to load live schedule',
-                              style: GoogleFonts.outfit(
-                                fontSize: 14,
-                                color: Colors.white,
-                                fontWeight: FontWeight.w500,
+            child: !_isTimetableMode
+                ? RefreshIndicator(
+                    onRefresh: _fetchSelectedStationDepartures,
+                    color: const Color(0xFF19A66E),
+                    backgroundColor: Colors.white,
+                    child: ListView(
+                      controller: scrollController,
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+                      children: [
+                        if (_isLoadingDepartures && _selectedStationDepartures.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 40),
+                            child: Center(
+                              child: CircularProgressIndicator(
+                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                               ),
                             ),
-                          ],
-                        ),
-                      ),
-                    )
-                  else ...[
-                    // mIndicator disruption banner (if any active alerts/cancellations)
-                    _buildDisruptionBanner(),
-
-                    // Group 1: Local Trains
-                    _buildGroupCard('Local Trains', localTrains),
-
-                    // Group 2: Express Trains
-                    _buildGroupCard('Express Trains', expressTrains),
-                    
-                    if (localTrains.isEmpty && expressTrains.isEmpty)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 40),
-                        child: Center(
-                          child: Text(
-                            'No upcoming departures found.',
-                            style: GoogleFonts.outfit(
-                              fontSize: 14,
-                              color: Colors.white70,
-                              fontWeight: FontWeight.w500,
+                          )
+                        else if (_departuresError != null && _selectedStationDepartures.isEmpty)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 40),
+                            child: Center(
+                              child: Column(
+                                children: [
+                                  const Icon(LucideIcons.wifiOff, color: Colors.white70, size: 36),
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    'Failed to load live schedule',
+                                    style: GoogleFonts.outfit(
+                                      fontSize: 14,
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    _departuresError!,
+                                    style: GoogleFonts.outfit(
+                                      fontSize: 12,
+                                      color: Colors.white70,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ],
-              ),
-            ),
+                          )
+                        else ...[
+                          // mIndicator disruption banner (if any active alerts/cancellations)
+                          _buildDisruptionBanner(),
+
+                          // Group 1: Local Trains
+                          _buildGroupCard('Local Trains', localTrains),
+
+                          // Group 2: Express Trains
+                          _buildGroupCard('Express Trains', expressTrains),
+                          
+                          if (localTrains.isEmpty && expressTrains.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 40),
+                              child: Center(
+                                child: Text(
+                                  'No upcoming departures found.',
+                                  style: GoogleFonts.outfit(
+                                    fontSize: 14,
+                                    color: Colors.white70,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ],
+                    ),
+                  )
+                : RefreshIndicator(
+                    onRefresh: _fetchSelectedStationTimetable,
+                    color: const Color(0xFF19A66E),
+                    backgroundColor: Colors.white,
+                    child: _buildTimetableListView(scrollController),
+                  ),
           ),
         ),
       ],
@@ -1491,6 +1565,173 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
           ),
           
           // Train departures list under this group
+          ...trains.map((train) => _buildSelectedStationDepartureRow(train)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTimetableListView(ScrollController scrollController) {
+    if (_isLoadingTimetable && _selectedStationTimetable.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.symmetric(vertical: 40),
+          child: CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+          ),
+        ),
+      );
+    }
+    
+    if (_timetableError != null && _selectedStationTimetable.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(LucideIcons.wifiOff, color: Colors.white70, size: 36),
+              const SizedBox(height: 12),
+              Text(
+                'Failed to load timetable',
+                style: GoogleFonts.outfit(
+                  fontSize: 14,
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _timetableError!,
+                style: GoogleFonts.outfit(
+                  fontSize: 12,
+                  color: Colors.white70,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _fetchSelectedStationTimetable,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: const Color(0xFF19A66E),
+                ),
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_selectedStationTimetable.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 40),
+          child: Text(
+            'No scheduled trains found.',
+            style: GoogleFonts.outfit(
+              fontSize: 14,
+              color: Colors.white70,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+      );
+    }
+
+    // Divide into morning (< 12) and evening (>= 12)
+    final morningTrains = <LiveTrainEntry>[];
+    final eveningTrains = <LiveTrainEntry>[];
+
+    for (final train in _selectedStationTimetable) {
+      final timeStr = train.scheduledDeparture ?? train.scheduledArrival ?? '';
+      if (timeStr.isEmpty) continue;
+      final parts = timeStr.split(':');
+      if (parts.isNotEmpty) {
+        final hour = int.tryParse(parts[0]) ?? 0;
+        if (hour < 12) {
+          morningTrains.add(train);
+        } else {
+          eveningTrains.add(train);
+        }
+      }
+    }
+
+    // Sort chronologically
+    int timeCompare(LiveTrainEntry a, LiveTrainEntry b) {
+      final timeA = a.scheduledDeparture ?? a.scheduledArrival ?? '';
+      final timeB = b.scheduledDeparture ?? b.scheduledArrival ?? '';
+      return timeA.compareTo(timeB);
+    }
+    morningTrains.sort(timeCompare);
+    eveningTrains.sort(timeCompare);
+
+    return ListView(
+      controller: scrollController,
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+      children: [
+        _buildTimetableSection('Morning Section (AM)', morningTrains, LucideIcons.sun),
+        const SizedBox(height: 16),
+        _buildTimetableSection('Evening Section (PM)', eveningTrains, LucideIcons.moon),
+      ],
+    );
+  }
+
+  Widget _buildTimetableSection(String title, List<LiveTrainEntry> trains, IconData icon) {
+    if (trains.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: const BoxDecoration(
+              color: Color(0xFFF8FAFC),
+              borderRadius: BorderRadius.only(
+                topLeft: Radius.circular(12),
+                topRight: Radius.circular(12),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(icon, size: 16, color: const Color(0xFF475569)),
+                const SizedBox(width: 8),
+                Text(
+                  title,
+                  style: GoogleFonts.outfit(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: const Color(0xFF475569),
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  '${trains.length} trains',
+                  style: GoogleFonts.outfit(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: const Color(0xFF94A3B8),
+                  ),
+                ),
+              ],
+            ),
+          ),
           ...trains.map((train) => _buildSelectedStationDepartureRow(train)),
         ],
       ),
