@@ -108,5 +108,15 @@ void main() {
       final entry = LiveTrainEntry.fromJson(mockJson);
       expect(entry.distanceFromSource, equals(12.50));
     });
+
+    test('Fetch UOI timetable and debug', () async {
+      final apiService = RailGadiApiService();
+      try {
+        final timetable = await apiService.getStationTimetable('UOI');
+        expect(timetable, isNotEmpty);
+      } catch (e) {
+        fail(e.toString());
+      }
+    });
   });
 }

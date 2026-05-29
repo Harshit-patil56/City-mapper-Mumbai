@@ -171,7 +171,7 @@ class _StationLiveBoardScreenState extends State<StationLiveBoardScreen> {
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(10),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -310,7 +310,7 @@ class _StationLiveBoardScreenState extends State<StationLiveBoardScreen> {
               height: 88,
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(10),
               ),
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -419,7 +419,7 @@ class _StationLiveBoardScreenState extends State<StationLiveBoardScreen> {
                 backgroundColor: const Color(0xFF19A66E),
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(10),
                 ),
                 padding:
                     const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
@@ -493,7 +493,7 @@ class _StationLiveBoardScreenState extends State<StationLiveBoardScreen> {
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.06),
@@ -655,6 +655,34 @@ class _StationLiveBoardScreenState extends State<StationLiveBoardScreen> {
     );
   }
 
+  String _formatTo12Hour(String timeStr) {
+    if (timeStr.isEmpty) return '';
+    try {
+      if (timeStr.contains('T')) {
+        final dt = DateTime.parse(timeStr);
+        int hour = dt.hour;
+        final int minute = dt.minute;
+        final String period = hour >= 12 ? 'PM' : 'AM';
+        hour = hour % 12;
+        if (hour == 0) hour = 12;
+        final String minStr = minute.toString().padLeft(2, '0');
+        return '$hour:$minStr $period';
+      }
+
+      final parts = timeStr.trim().split(':');
+      if (parts.length >= 2) {
+        int hour = int.parse(parts[0]);
+        final int minute = int.parse(parts[1]);
+        final String period = hour >= 12 ? 'PM' : 'AM';
+        hour = hour % 12;
+        if (hour == 0) hour = 12;
+        final String minStr = minute.toString().padLeft(2, '0');
+        return '$hour:$minStr $period';
+      }
+    } catch (_) {}
+    return timeStr;
+  }
+
   Widget _buildTimeDisplay(LiveTrainEntry train) {
     final String? scheduled = train.scheduledDeparture ?? train.scheduledArrival;
 
@@ -662,17 +690,19 @@ class _StationLiveBoardScreenState extends State<StationLiveBoardScreen> {
       return const SizedBox.shrink();
     }
 
+    final formattedScheduled = _formatTo12Hour(scheduled);
+
     // For upcoming trains with delay, show both scheduled and expected
     if (train.liveType == 'upcoming' && !train.isOnTime) {
       final String? expected = train.expectedArrivalTime;
       final String expectedShort =
-          expected != null ? _extractTime(expected) : '';
+          expected != null ? _formatTo12Hour(expected) : '';
 
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            scheduled,
+            formattedScheduled,
             style: GoogleFonts.outfit(
               fontSize: 13,
               color: const Color(0xFFBDBDBD),
@@ -699,7 +729,7 @@ class _StationLiveBoardScreenState extends State<StationLiveBoardScreen> {
     // For departed trains, show departure time
     if (train.liveType == 'departed' && train.departedAt != null) {
       return Text(
-        _extractTime(train.departedAt!),
+        _formatTo12Hour(train.departedAt!),
         style: GoogleFonts.outfit(
           fontSize: 14,
           fontWeight: FontWeight.w600,
@@ -710,27 +740,12 @@ class _StationLiveBoardScreenState extends State<StationLiveBoardScreen> {
 
     // Default: show scheduled time
     return Text(
-      scheduled,
+      formattedScheduled,
       style: GoogleFonts.outfit(
         fontSize: 14,
         fontWeight: FontWeight.w600,
         color: const Color(0xFF212121),
       ),
     );
-  }
-
-  /// Extracts "HH:MM" from an ISO 8601 timestamp like "2026-03-14T11:35:00+05:30".
-  String _extractTime(String isoTimestamp) {
-    try {
-      final dt = DateTime.parse(isoTimestamp);
-      return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
-    } catch (_) {
-      // If parsing fails, try to extract manually
-      final tIndex = isoTimestamp.indexOf('T');
-      if (tIndex != -1 && isoTimestamp.length >= tIndex + 6) {
-        return isoTimestamp.substring(tIndex + 1, tIndex + 6);
-      }
-      return isoTimestamp;
-    }
   }
 }

@@ -129,7 +129,12 @@ class LiveTrainEntry {
       scheduledArrival: stop['arrival'] as String?,
       scheduledDeparture: stop['departure'] as String?,
       stopDay: stop['departureDay'] as int?,
-      distanceFromSource: (stop['distance'] as num?)?.toDouble(),
+      distanceFromSource: () {
+        final dist = stop['distance'];
+        if (dist is num) return dist.toDouble();
+        if (dist is String) return double.tryParse(dist);
+        return null;
+      }(),
       liveType: 'scheduled', // no live status for static board
     );
   }
@@ -296,10 +301,10 @@ class RailGadiApiService {
 
   /// Fetches the full stop-by-stop schedule for [trainNumber].
   ///
-  /// Uses `/trains/{number}?haltsOnly=true` — confirmed working endpoint.
+  /// Uses `/trains/{number}` to retrieve all stops (intermediate pass-through and halts).
   /// Returns an empty list on failure so callers degrade gracefully.
   Future<List<RailGadiTrainStop>> getTrainSchedule(String trainNumber) async {
-    final uri = Uri.parse('$_baseUrl/trains/$trainNumber?haltsOnly=true');
+    final uri = Uri.parse('$_baseUrl/trains/$trainNumber');
     try {
       final response = await _client.get(uri).timeout(_timeout);
       if (response.statusCode == 200) {
@@ -322,10 +327,10 @@ class RailGadiApiService {
 
   /// Fetches the static timetable for a station.
   ///
-  /// Uses `/stations/{code}/trains?includeIntermediate=false` endpoint.
+  /// Uses `/stations/{code}/trains?includeIntermediate=true` endpoint.
   /// Returns a list of LiveTrainEntry representing the scheduled trains.
   Future<List<LiveTrainEntry>> getStationTimetable(String code) async {
-    final uri = Uri.parse('$_baseUrl/stations/$code/trains?includeIntermediate=false');
+    final uri = Uri.parse('$_baseUrl/stations/$code/trains?includeIntermediate=true');
     try {
       final response = await _client.get(uri).timeout(_timeout);
       if (response.statusCode == 200) {
@@ -339,7 +344,9 @@ class RailGadiApiService {
               .toList();
         }
       }
-    } catch (_) {}
+    } catch (_) {
+      // Silent catch for graceful degradation
+    }
     return [];
   }
 

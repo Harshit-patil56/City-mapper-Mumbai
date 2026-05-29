@@ -281,7 +281,7 @@ class _CityMapperHomeScreenState extends State<CityMapperHomeScreen> {
                       width: double.infinity,
                       decoration: BoxDecoration(
                         color: const Color(0xFF1FA86A),
-                        borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                        borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
                         boxShadow: [
                           BoxShadow(
                             color: Colors.black.withValues(alpha: 0.06),
@@ -357,7 +357,7 @@ class _CityMapperHomeScreenState extends State<CityMapperHomeScreen> {
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                         decoration: BoxDecoration(
                           color: const Color(0xFF148E59),
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(10),
                         ),
                         child: Row(
                           children: [
@@ -483,7 +483,7 @@ class _CityMapperHomeScreenState extends State<CityMapperHomeScreen> {
                   margin: const EdgeInsets.symmetric(horizontal: 16),
                   decoration: BoxDecoration(
                     color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(10),
                     boxShadow: [
                       BoxShadow(
                         color: Colors.black.withValues(alpha: 0.04),
@@ -504,8 +504,8 @@ class _CityMapperHomeScreenState extends State<CityMapperHomeScreen> {
                       InkWell(
                         onTap: () {},
                         borderRadius: const BorderRadius.only(
-                          topLeft: Radius.circular(12),
-                          topRight: Radius.circular(12),
+                          topLeft: Radius.circular(10),
+                          topRight: Radius.circular(10),
                         ),
                         child: Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 14.0),
@@ -555,7 +555,7 @@ class _CityMapperHomeScreenState extends State<CityMapperHomeScreen> {
                                       child: InkWell(
                                         onTap: () {},
                                         borderRadius: const BorderRadius.only(
-                                          bottomLeft: Radius.circular(12),
+                                          bottomLeft: Radius.circular(10),
                                         ),
                                         child: Padding(
                                           padding: const EdgeInsets.only(left: 16.0),
@@ -641,7 +641,7 @@ class _CityMapperHomeScreenState extends State<CityMapperHomeScreen> {
                                     InkWell(
                                       onTap: () {},
                                       borderRadius: const BorderRadius.only(
-                                        bottomRight: Radius.circular(12),
+                                        bottomRight: Radius.circular(10),
                                       ),
                                       child: Padding(
                                         padding: const EdgeInsets.symmetric(horizontal: 16.0),

@@ -4,6 +4,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:latlong2/latlong.dart' hide Path;
 import 'package:lucide_icons/lucide_icons.dart';
+import 'package:timelines_plus/timelines_plus.dart';
 import '../../data/mumbai_stations.dart';
 import '../../services/api_service.dart';
 
@@ -24,15 +25,15 @@ const _inkMid   = Color(0xFF64748B);   // secondary text
 const _inkFaint = Color(0xFFCBD5E1);   // disabled / past
 const _surface  = Color(0xFFF8FAFC);   // slight tint for footer
 
-class TrainDetailSheet extends StatefulWidget {
+class TrainDetailScreen extends StatefulWidget {
   final LiveTrainEntry train;
-  const TrainDetailSheet({super.key, required this.train});
+  const TrainDetailScreen({super.key, required this.train});
 
   @override
-  State<TrainDetailSheet> createState() => _TrainDetailSheetState();
+  State<TrainDetailScreen> createState() => _TrainDetailScreenState();
 }
 
-class _TrainDetailSheetState extends State<TrainDetailSheet>
+class _TrainDetailScreenState extends State<TrainDetailScreen>
     with SingleTickerProviderStateMixin {
   final _railGadi   = RailGadiApiService();
   final _mIndicator = MIndicatorApiService();
@@ -46,7 +47,8 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
   Timer? _tickTimer;
 
   final MapController _mapController = MapController();
-  final _scroll = ScrollController();
+  final DraggableScrollableController _draggableController = DraggableScrollableController();
+  ScrollController? _sheetScrollController;
 
   @override
   void initState() {
@@ -62,7 +64,6 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
   void dispose() {
     _refreshTimer?.cancel();
     _tickTimer?.cancel();
-    _scroll.dispose();
     _railGadi.dispose();
     _mIndicator.dispose();
     super.dispose();
@@ -94,17 +95,145 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
     final live =
         await _mIndicator.getRunningStatus(widget.train.trainNumber);
     if (!mounted) return;
-    setState(() { _live = live; _loadingLive = false;
-                  _lastRefresh = DateTime.now(); });
+    setState(() {
+      _live = live;
+      _loadingLive = false;
+      _lastRefresh = DateTime.now();
+      
+      // Fallback: If stops are empty, populate them from live running status stops
+      if (_stops.isEmpty && live != null && live.stops.isNotEmpty) {
+        _stops = live.stops.map((s) {
+          return RailGadiTrainStop(
+            sequence: s.distance ?? 0,
+            stationCode: s.stationCode,
+            stationName: s.stationName,
+            arrival: s.scheduledArrival,
+            departure: s.scheduledDeparture,
+            distance: s.distance?.toDouble(),
+          );
+        }).toList();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _scrollToCurrent();
+          _fitMapToRoute();
+        });
+      }
+    });
+  }
+
+  String _formatTo12Hour(String timeStr) {
+    if (timeStr.isEmpty) return '';
+    try {
+      if (timeStr.contains('T')) {
+        final dt = DateTime.parse(timeStr);
+        int hour = dt.hour;
+        final int minute = dt.minute;
+        final String period = hour >= 12 ? 'PM' : 'AM';
+        hour = hour % 12;
+        if (hour == 0) hour = 12;
+        final String minStr = minute.toString().padLeft(2, '0');
+        return '$hour:$minStr $period';
+      }
+
+      final parts = timeStr.trim().split(':');
+      if (parts.length >= 2) {
+        int hour = int.parse(parts[0]);
+        final int minute = int.parse(parts[1]);
+        final String period = hour >= 12 ? 'PM' : 'AM';
+        hour = hour % 12;
+        if (hour == 0) hour = 12;
+        final String minStr = minute.toString().padLeft(2, '0');
+        return '$hour:$minStr $period';
+      }
+    } catch (_) {}
+    return timeStr;
+  }
+
+  String _getSummaryText(RailGadiTrainStop stop, bool isFirst, bool isLast, bool isCur) {
+    final rawTime = isFirst
+        ? (stop.departure ?? '')
+        : isLast
+            ? (stop.arrival ?? '')
+            : (stop.arrival ?? stop.departure ?? '');
+    if (rawTime.isEmpty) return 'No time scheduled';
+    final time = _formatTo12Hour(rawTime);
+    if (isFirst) return 'Departs at $time';
+    if (isLast) return 'Arrives at $time';
+    return 'Scheduled at $time';
+  }
+
+  Widget _buildDdsCircle(int i, int cur, bool isPast, bool isCur) {
+    final bool isTerminus = i == _stops.length - 1;
+    if (isPast) {
+      // complete: solid blue with check icon
+      return Container(
+        width: 24,
+        height: 24,
+        decoration: const BoxDecoration(
+          color: Color(0xFF0076CE),
+          shape: BoxShape.circle,
+        ),
+        child: const Center(
+          child: Icon(
+            LucideIcons.check,
+            size: 11,
+            color: Colors.white,
+          ),
+        ),
+      );
+    } else if (isCur) {
+      // in-progress: blue border with blue dot
+      return Container(
+        width: 24,
+        height: 24,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+          border: Border.all(color: const Color(0xFF0076CE), width: 2),
+        ),
+        child: Center(
+          child: Container(
+            width: 8,
+            height: 8,
+            decoration: const BoxDecoration(
+              color: Color(0xFF0076CE),
+              shape: BoxShape.circle,
+            ),
+          ),
+        ),
+      );
+    } else if (isTerminus) {
+      // active: blue border, empty
+      return Container(
+        width: 24,
+        height: 24,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+          border: Border.all(color: const Color(0xFF0076CE), width: 2),
+        ),
+      );
+    } else {
+      // inactive: gray border, empty
+      return Container(
+        width: 24,
+        height: 24,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+          border: Border.all(color: const Color(0xFFC8C9C7), width: 2),
+        ),
+      );
+    }
   }
 
   void _scrollToCurrent() {
-    if (!_scroll.hasClients || _stops.isEmpty) return;
+    final sc = _sheetScrollController;
+    if (sc == null || !sc.hasClients || _stops.isEmpty) return;
     final idx = _currentIdx;
     if (idx <= 1) return;
     final target = (idx * 62.0)
-        .clamp(0.0, _scroll.position.maxScrollExtent);
-    _scroll.animateTo(target,
+        .clamp(0.0, sc.position.maxScrollExtent);
+    sc.animateTo(target,
         duration: const Duration(milliseconds: 450),
         curve: Curves.easeOut);
   }
@@ -141,6 +270,52 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
     }
     if (widget.train.trainNumber.startsWith('9')) return TrainLine.western;
     return TrainLine.central;
+  }
+
+  bool isLocalTrain(LiveTrainEntry train) {
+    final type = (train.trainType ?? '').trim().toLowerCase();
+    final name = train.trainName.toLowerCase();
+    if (type.contains('local') ||
+        type.contains('emu') ||
+        type.contains('memu') ||
+        type.contains('demu') ||
+        type.contains('suburban') ||
+        type.contains('sub') ||
+        name.contains('local') ||
+        name.contains('emu') ||
+        name.contains('suburban') ||
+        name.contains('memu') ||
+        name.contains('slow') ||
+        name.contains('fast')) {
+      return true;
+    }
+    if (type.contains('express') ||
+        type.contains('superfast') ||
+        type.contains('mail') ||
+        type.contains('passenger') ||
+        type.contains('sf') ||
+        type.contains('duronto') ||
+        type.contains('rajdhani') ||
+        type.contains('shatabdi')) {
+      return false;
+    }
+    return true;
+  }
+
+  bool isFastLocal(LiveTrainEntry train) {
+    final type = (train.trainType ?? '').trim().toLowerCase();
+    final name = train.trainName.toLowerCase();
+    if (!isLocalTrain(train)) return false;
+    if (type.contains('fast') ||
+        type.contains('sf') ||
+        name.contains('fast') ||
+        name.contains(' sf') ||
+        name.contains('(f)') ||
+        name.contains('semi-fast') ||
+        name.contains('semifast')) {
+      return true;
+    }
+    return false;
   }
 
   LatLng? _getStationLatLng(String code, String name) {
@@ -257,129 +432,150 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      clipBehavior: Clip.hardEdge,
-      decoration: const BoxDecoration(
-        color: _bg,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      child: Column(
+    return Scaffold(
+      body: Stack(
         children: [
-          _buildMapHeader(),
-          _buildColoredHeaderStrip(),
-          Expanded(child: _buildBody()),
-          _buildFooter(),
+          // 1. Full Screen Map background
+          Positioned.fill(
+            child: _buildMapBackground(),
+          ),
+
+          // 2. Floating Circular Back Button
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 16,
+            left: 16,
+            child: GestureDetector(
+              onTap: () => Navigator.of(context).pop(),
+              child: Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.15),
+                      blurRadius: 8,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  LucideIcons.arrowLeft,
+                  size: 20,
+                  color: Colors.black87,
+                ),
+              ),
+            ),
+          ),
+
+          // 3. Draggable Scrollable Sheet at the bottom (Snapping Enabled)
+          DraggableScrollableSheet(
+            controller: _draggableController,
+            initialChildSize: 0.45,
+            minChildSize: 0.18,
+            maxChildSize: 0.95,
+            snap: true,
+            snapSizes: const [0.18, 0.45, 0.95],
+            builder: (context, scrollController) {
+              _sheetScrollController = scrollController;
+              return Container(
+                clipBehavior: Clip.hardEdge,
+                decoration: const BoxDecoration(
+                  color: _bg,
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black12,
+                      blurRadius: 15,
+                      offset: Offset(0, -4),
+                    ),
+                  ],
+                ),
+                child: _buildSheetContent(scrollController),
+              );
+            },
+          ),
         ],
       ),
     );
   }
 
-  // ── Route Map at the Top ──────────────────────────────────
+  // ── Route Map Background ──────────────────────────────────
 
-  Widget _buildMapHeader() {
+  Widget _buildMapBackground() {
     final routePoints = _stops
         .map((s) => _getStationLatLng(s.stationCode, s.stationName))
         .whereType<LatLng>()
         .toList();
 
-    return SizedBox(
-      height: 220,
-      child: Stack(
-        children: [
-          FlutterMap(
-            mapController: _mapController,
-            options: MapOptions(
-              initialCenter: const LatLng(19.0760, 72.8777),
-              initialZoom: 11.5,
-              interactionOptions: const InteractionOptions(
-                flags: InteractiveFlag.all,
+    return FlutterMap(
+      mapController: _mapController,
+      options: MapOptions(
+        initialCenter: const LatLng(19.0760, 72.8777),
+        initialZoom: 11.5,
+        interactionOptions: const InteractionOptions(
+          flags: InteractiveFlag.all,
+        ),
+      ),
+      children: [
+        TileLayer(
+          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+          userAgentPackageName: 'com.quntanix.citymappermumbai',
+        ),
+        if (routePoints.isNotEmpty) ...[
+          PolylineLayer(
+            polylines: [
+              Polyline(
+                points: routePoints,
+                color: _line.color,
+                strokeWidth: 5.0,
               ),
-            ),
-            children: [
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.quntanix.citymappermumbai',
-              ),
-              if (routePoints.isNotEmpty) ...[
-                PolylineLayer(
-                  polylines: [
-                    Polyline(
-                      points: routePoints,
-                      color: _line.color,
-                      strokeWidth: 5.0,
-                    ),
-                  ],
-                ),
-                MarkerLayer(
-                  markers: _stops.map((stop) {
-                    final latLng = _getStationLatLng(stop.stationCode, stop.stationName);
-                    if (latLng == null) return null;
-
-                    final isCur = _stops.indexOf(stop) == _currentIdx;
-
-                    return Marker(
-                      point: latLng,
-                      width: isCur ? 24 : 12,
-                      height: isCur ? 24 : 12,
-                      child: isCur
-                          ? Container(
-                              decoration: const BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: Color(0x3D2F80ED), // 24% opacity blue halo
-                              ),
-                              child: Center(
-                                child: Container(
-                                  width: 10,
-                                  height: 10,
-                                  decoration: const BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: Color(0xFF2F80ED), // active blue dot
-                                  ),
-                                ),
-                              ),
-                            )
-                          : Container(
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: Colors.white,
-                                border: Border.all(
-                                  color: _line.color,
-                                  width: 2.5,
-                                ),
-                              ),
-                            ),
-                    );
-                  }).whereType<Marker>().toList(),
-                ),
-              ],
             ],
           ),
-          // Floating close button
-          Positioned(
-            top: 12,
-            right: 12,
-            child: Container(
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black12,
-                    blurRadius: 4,
-                    offset: Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: IconButton(
-                icon: const Icon(LucideIcons.x, size: 16, color: Colors.black87),
-                onPressed: () => Navigator.of(context).pop(),
-                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                padding: EdgeInsets.zero,
-              ),
-            ),
+          MarkerLayer(
+            markers: _stops.map((stop) {
+              final latLng = _getStationLatLng(stop.stationCode, stop.stationName);
+              if (latLng == null) return null;
+
+              final isCur = _stops.indexOf(stop) == _currentIdx;
+
+              return Marker(
+                point: latLng,
+                width: isCur ? 24 : 12,
+                height: isCur ? 24 : 12,
+                child: isCur
+                    ? Container(
+                        decoration: const BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Color(0x3D2F80ED),
+                        ),
+                        child: Center(
+                          child: Container(
+                            width: 10,
+                            height: 10,
+                            decoration: const BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Color(0xFF2F80ED),
+                            ),
+                          ),
+                        ),
+                      )
+                    : Container(
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white,
+                          border: Border.all(
+                            color: _line.color,
+                            width: 2.5,
+                          ),
+                        ),
+                      ),
+              );
+            }).whereType<Marker>().toList(),
           ),
         ],
-      ),
+      ],
     );
   }
 
@@ -416,42 +612,92 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
     );
   }
 
-  // ── Timeline body ─────────────────────────────────────────
+  // ── Drag Handle ───────────────────────────────────────────
 
-  Widget _buildBody() {
-    if (_loadingSchedule) {
-      return const Center(
-          child: CircularProgressIndicator(
-              valueColor: AlwaysStoppedAnimation<Color>(_inkMid),
-              strokeWidth: 2));
-    }
-
-    if (_stops.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(LucideIcons.train,
-                  size: 40, color: _inkFaint),
-              const SizedBox(height: 14),
-              Text('Schedule unavailable',
-                  style: GoogleFonts.outfit(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: _inkMid)),
-              const SizedBox(height: 4),
-              Text(
-                'Train ${widget.train.trainNumber} is not found '
-                'in the RailGadi database.',
-                style: GoogleFonts.outfit(
-                    fontSize: 12, color: _inkFaint),
-                textAlign: TextAlign.center,
-              ),
-            ],
+  Widget _buildDragHandle() {
+    return Container(
+      color: Colors.white,
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Center(
+        child: Container(
+          width: 36,
+          height: 5,
+          decoration: BoxDecoration(
+            color: const Color(0xFFE2E8F0),
+            borderRadius: BorderRadius.circular(2.5),
           ),
         ),
+      ),
+    );
+  }
+
+  // ── Sheet Scrollable Content Layout ───────────────────────
+
+  Widget _buildSheetContent(ScrollController scrollController) {
+    final headerWidget = GestureDetector(
+      onVerticalDragUpdate: (details) {
+        if (_draggableController.isAttached) {
+          final currentExtent = _draggableController.size;
+          final newExtent = currentExtent -
+              details.primaryDelta! /
+                  MediaQuery.of(context).size.height;
+          _draggableController.jumpTo(newExtent.clamp(0.18, 0.95));
+        }
+      },
+      onVerticalDragEnd: (details) {
+        if (_draggableController.isAttached) {
+          final currentSize = _draggableController.size;
+          const snaps = [0.18, 0.45, 0.95];
+          double targetSize = snaps[0];
+          double minDiff = (currentSize - snaps[0]).abs();
+          for (int i = 1; i < snaps.length; i++) {
+            final diff = (currentSize - snaps[i]).abs();
+            if (diff < minDiff) {
+              minDiff = diff;
+              targetSize = snaps[i];
+            }
+          }
+          _draggableController.animateTo(
+            targetSize,
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOutCubic,
+          );
+        }
+      },
+      behavior: HitTestBehavior.opaque,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildDragHandle(),
+          _buildColoredHeaderStrip(),
+        ],
+      ),
+    );
+
+    if (_loadingSchedule && _stops.isEmpty) {
+      return Column(
+        children: [
+          headerWidget,
+          Expanded(
+            child: ListView(
+              controller: scrollController,
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: EdgeInsets.zero,
+              children: [
+                SizedBox(
+                  height: MediaQuery.of(context).size.height * 0.4,
+                  child: const Center(
+                    child: CircularProgressIndicator(
+                      valueColor: AlwaysStoppedAnimation<Color>(_inkMid),
+                      strokeWidth: 2,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       );
     }
 
@@ -459,14 +705,74 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
 
     return Column(
       children: [
-        _buildRouteInfoCard(),
-        const Divider(height: 1, color: Color(0xFFF1F5F9)),
+        headerWidget,
         Expanded(
-          child: ListView.builder(
-            controller: _scroll,
-            padding: const EdgeInsets.fromLTRB(20, 16, 16, 16),
-            itemCount: _stops.length,
-            itemBuilder: (ctx, i) => _stopRow(_stops, i, cur),
+          child: _stops.isEmpty
+              ? _buildEmptyState(scrollController)
+              : ListView(
+                  controller: scrollController,
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: EdgeInsets.zero,
+                  children: [
+                    _buildRouteInfoCard(),
+                    const Divider(height: 1, color: Color(0xFFF1F5F9)),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 16, 16, 16),
+                      child: FixedTimeline(
+                        theme: TimelineThemeData(
+                          nodePosition: 0.0,
+                          indicatorPosition: 0.0,
+                        ),
+                        children: List.generate(
+                          _stops.length,
+                          (i) => _stopRow(_stops, i, cur),
+                        ),
+                      ),
+                    ),
+                    _buildFooter(),
+                  ],
+                ),
+        ),
+      ],
+    );
+  }
+
+  // ── Empty State ───────────────────────────────────────────
+
+  Widget _buildEmptyState(ScrollController scrollController) {
+    return ListView(
+      controller: scrollController,
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: EdgeInsets.zero,
+      children: [
+        SizedBox(
+          height: MediaQuery.of(context).size.height * 0.4,
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(LucideIcons.train, size: 40, color: _inkFaint),
+                  const SizedBox(height: 14),
+                  Text(
+                    'Schedule unavailable',
+                    style: GoogleFonts.outfit(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: _inkMid,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Train ${widget.train.trainNumber} is not found '
+                    'in the RailGadi database.',
+                    style: GoogleFonts.outfit(fontSize: 12, color: _inkFaint),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ],
@@ -502,14 +808,38 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(
-                  widget.train.trainName,
-                  style: GoogleFonts.outfit(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    color: _ink,
-                  ),
-                  overflow: TextOverflow.ellipsis,
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        widget.train.trainName,
+                        style: GoogleFonts.outfit(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: _ink,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (isLocalTrain(widget.train)) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2.5),
+                        decoration: BoxDecoration(
+                          color: isFastLocal(widget.train) ? const Color(0xFFEF4444) : const Color(0xFF10B981),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          isFastLocal(widget.train) ? 'F' : 'S',
+                          style: GoogleFonts.outfit(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ],
@@ -561,119 +891,97 @@ class _TrainDetailSheetState extends State<TrainDetailSheet>
     final isCur   = i == cur;
     final isPast  = i < cur;
 
-    final time = isFirst
-        ? (stop.departure ?? '')
-        : isLast
-            ? (stop.arrival ?? '')
-            : (stop.arrival ?? stop.departure ?? '');
-
-    final Color nameColor = isCur
-        ? _ink
-        : isPast
-            ? _inkFaint
-            : _ink;
-    final FontWeight nameWeight =
-        isCur ? FontWeight.w700 : FontWeight.w500;
-    final Color timeColor = isCur ? const Color(0xFF2F80ED) : _inkMid;
-
     final interchangeLines = _getInterchangeLines(stop.stationName);
 
-    return IntrinsicHeight(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Timeline column with custom painter for ticks, vertical line and active dot
-          CustomPaint(
-            size: const Size(32, 0),
-            painter: TimelinePainter(
-              lineColor: _line.color,
-              pastColor: _inkFaint,
-              isFirst: isFirst,
-              isLast: isLast,
-              isCur: isCur,
-              isPast: isPast,
-            ),
-          ),
-
-          // Content column
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return TimelineTile(
+      nodeAlign: TimelineNodeAlign.start,
+      node: TimelineNode(
+        indicator: _buildDdsCircle(i, cur, isPast, isCur),
+        startConnector: isFirst
+            ? null
+            : SolidLineConnector(
+                color: (isPast || isCur) ? const Color(0xFF0076CE) : const Color(0xFFC8C9C7),
+                thickness: 2,
+              ),
+        endConnector: isLast
+            ? null
+            : SolidLineConnector(
+                color: isPast ? const Color(0xFF0076CE) : const Color(0xFFC8C9C7),
+                thickness: 2,
+              ),
+      ),
+      contents: Padding(
+        padding: const EdgeInsets.only(left: 12.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 3), // Visual alignment offset for first content line with circle center
+            // Step Name: Station Name + connection badges
+            Row(
               children: [
-                const SizedBox(height: 14),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              stop.stationName.isNotEmpty
-                                  ? stop.stationName
-                                  : stop.stationCode,
-                              style: GoogleFonts.outfit(
-                                fontSize: isCur ? 15 : 14,
-                                fontWeight: nameWeight,
-                                color: nameColor,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          // Connection badges (like Paya Lebar EW badge in screenshot)
-                          if (interchangeLines.isNotEmpty) ...[
-                            const SizedBox(width: 8),
-                            ...interchangeLines.map((line) => Container(
-                              margin: const EdgeInsets.only(right: 4),
-                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                              decoration: BoxDecoration(
-                                color: line.color,
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Text(
-                                line.shortCode,
-                                style: GoogleFonts.outfit(
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w800,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            )),
-                          ],
-                        ],
+                Flexible(
+                  child: Text(
+                    stop.stationName.isNotEmpty
+                        ? stop.stationName
+                        : stop.stationCode,
+                    style: GoogleFonts.outfit(
+                      fontSize: isCur ? 15 : 14,
+                      fontWeight: isCur ? FontWeight.w700 : FontWeight.w500,
+                      color: isCur
+                          ? const Color(0xFF1D1D1D)
+                          : (isPast ? const Color(0xFF0076CE) : (i == stops.length - 1 ? const Color(0xFF0076CE) : const Color(0xFF6C757D))),
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (interchangeLines.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  ...interchangeLines.map((line) => Container(
+                    margin: const EdgeInsets.only(right: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                    decoration: BoxDecoration(
+                      color: line.color,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      line.shortCode,
+                      style: GoogleFonts.outfit(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
                       ),
                     ),
-                    if (time.isNotEmpty) ...[
-                      const SizedBox(width: 8),
-                      Text(time,
-                          style: GoogleFonts.outfit(
-                              fontSize: 13,
-                              fontWeight: isCur
-                                  ? FontWeight.w700
-                                  : FontWeight.w400,
-                              color: timeColor,
-                              fontFeatures: const [
-                                FontFeature.tabularFigures()
-                              ])),
-                    ],
-                  ],
-                ),
-                if (isCur && (_live?.delay ?? 0) > 0) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    '${_live!.delay} min late',
-                    style: GoogleFonts.outfit(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: const Color(0xFFD97706)),
-                  ),
+                  )),
                 ],
-                const SizedBox(height: 14),
-                // Divider line below the station (only right of timeline)
-                const Divider(height: 1, thickness: 1, color: Color(0xFFE2E8F0)),
               ],
             ),
-          ),
-        ],
+            const SizedBox(height: 4),
+            // Summary Text: departure/arrival times
+            Text(
+              _getSummaryText(stop, isFirst, isLast, isCur),
+              style: GoogleFonts.outfit(
+                fontSize: 12,
+                fontWeight: isCur ? FontWeight.w600 : FontWeight.w400,
+                color: isCur ? const Color(0xFF2F80ED) : const Color(0xFF8C9099),
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+            if (isCur && (_live?.delay ?? 0) > 0) ...[
+              const SizedBox(height: 2),
+              Text(
+                '${_live!.delay} min late',
+                style: GoogleFonts.outfit(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: const Color(0xFFD97706)),
+              ),
+            ],
+            const SizedBox(height: 14),
+            // Divider line below the station (only right of timeline)
+            const Divider(height: 1, thickness: 1, color: Color(0xFFE2E8F0)),
+            const SizedBox(height: 14),
+          ],
+        ),
       ),
     );
   }
@@ -813,86 +1121,4 @@ class _InfoChip extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Timeline Painter matching Singapore Circle Line MRT Style
-// ─────────────────────────────────────────────────────────────────────────────
 
-class TimelinePainter extends CustomPainter {
-  final Color lineColor;
-  final Color pastColor;
-  final bool isFirst;
-  final bool isLast;
-  final bool isCur;
-  final bool isPast;
-
-  TimelinePainter({
-    required this.lineColor,
-    required this.pastColor,
-    required this.isFirst,
-    required this.isLast,
-    required this.isCur,
-    required this.isPast,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final double centerX = size.width / 2;
-    final double centerY = 24.0; // Fixed vertical height for ticks and active dot
-    final double lineThickness = 5.0;
-
-    // Draw top line segment (if not the first station)
-    if (!isFirst) {
-      final paint = Paint()
-        ..color = isPast ? pastColor : lineColor
-        ..strokeWidth = lineThickness
-        ..style = PaintingStyle.stroke;
-      canvas.drawLine(Offset(centerX, 0), Offset(centerX, centerY), paint);
-    }
-
-    // Draw bottom line segment (if not the last station)
-    if (!isLast) {
-      final paint = Paint()
-        ..color = (isPast && !isCur) ? pastColor : lineColor
-        ..strokeWidth = lineThickness
-        ..style = PaintingStyle.stroke;
-      canvas.drawLine(Offset(centerX, centerY), Offset(centerX, size.height), paint);
-    }
-
-    // Draw tick or active dot
-    if (isCur) {
-      // 24% opacity blue halo
-      final haloPaint = Paint()
-        ..color = const Color(0x3D2F80ED)
-        ..style = PaintingStyle.fill;
-      canvas.drawCircle(Offset(centerX, centerY), 10.0, haloPaint);
-
-      // Solid blue center dot
-      final dotPaint = Paint()
-        ..color = const Color(0xFF2F80ED)
-        ..style = PaintingStyle.fill;
-      canvas.drawCircle(Offset(centerX, centerY), 5.0, dotPaint);
-    } else {
-      // Draw horizontal tick sticking to the right (length 6, thickness 3.5)
-      final tickPaint = Paint()
-        ..color = isPast ? pastColor : lineColor
-        ..strokeWidth = 3.5
-        ..strokeCap = StrokeCap.round;
-      
-      canvas.drawLine(
-        Offset(centerX, centerY),
-        Offset(centerX + 6.0, centerY),
-        tickPaint,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant TimelinePainter oldDelegate) {
-    return oldDelegate.lineColor != lineColor ||
-        oldDelegate.pastColor != pastColor ||
-        oldDelegate.isFirst != isFirst ||
-        oldDelegate.isLast != isLast ||
-        oldDelegate.isCur != isCur ||
-        oldDelegate.isPast != isPast;
-  }
-}

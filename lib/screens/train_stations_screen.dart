@@ -276,6 +276,24 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
     return true; // default to Local for Mumbai Local train app!
   }
 
+  bool isFastLocal(LiveTrainEntry train) {
+    final type = (train.trainType ?? '').trim().toLowerCase();
+    final name = train.trainName.toLowerCase();
+    
+    if (!isLocalTrain(train)) return false;
+
+    if (type.contains('fast') ||
+        type.contains('sf') ||
+        name.contains('fast') ||
+        name.contains(' sf') ||
+        name.contains('(f)') ||
+        name.contains('semi-fast') ||
+        name.contains('semifast')) {
+      return true;
+    }
+    return false;
+  }
+
   void _navigateToLiveBoard(MumbaiStation station) {
     _selectStation(station);
   }
@@ -467,49 +485,51 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
           ),
           // Station markers
           MarkerLayer(
-            markers: _nearbyStations
-                .map(
-                  (entry) {
-                    final isSelected = entry.station.code == _selectedStation?.code;
-                    return Marker(
-                      point: LatLng(entry.station.lat, entry.station.lng),
-                      width: isSelected ? 38 : 28,
-                      height: isSelected ? 38 : 28,
-                      child: GestureDetector(
-                        onTap: () => _selectStation(entry.station),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          decoration: BoxDecoration(
-                            color: entry.station.line.color,
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: isSelected ? const Color(0xFFFFEB3B) : Colors.white,
-                              width: isSelected ? 3.5 : 2.5,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: isSelected
-                                    ? Colors.black.withValues(alpha: 0.4)
-                                    : Colors.black.withValues(alpha: 0.2),
-                                blurRadius: isSelected ? 8 : 4,
-                                spreadRadius: isSelected ? 2 : 0,
-                                offset: const Offset(0, 2),
-                              ),
-                            ],
+            markers: () {
+              final Map<String, MumbaiStation> uniqueStations = {};
+              for (final station in MumbaiStationData.allStations) {
+                uniqueStations.putIfAbsent(station.code, () => station);
+              }
+              return uniqueStations.values.map((station) {
+                final isSelected = station.code == _selectedStation?.code;
+                return Marker(
+                  point: LatLng(station.lat, station.lng),
+                  width: isSelected ? 38 : 28,
+                  height: isSelected ? 38 : 28,
+                  child: GestureDetector(
+                    onTap: () => _selectStation(station),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      decoration: BoxDecoration(
+                        color: station.line.color,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: isSelected ? const Color(0xFFFFEB3B) : Colors.white,
+                          width: isSelected ? 3.5 : 2.5,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: isSelected
+                                ? Colors.black.withValues(alpha: 0.4)
+                                : Colors.black.withValues(alpha: 0.2),
+                            blurRadius: isSelected ? 8 : 4,
+                            spreadRadius: isSelected ? 2 : 0,
+                            offset: const Offset(0, 2),
                           ),
-                          child: const Center(
-                            child: Icon(
-                              LucideIcons.train,
-                              size: 12,
-                              color: Colors.white,
-                            ),
-                          ),
+                        ],
+                      ),
+                      child: const Center(
+                        child: Icon(
+                          LucideIcons.train,
+                          size: 12,
+                          color: Colors.white,
                         ),
                       ),
-                    );
-                  },
-                )
-                .toList(),
+                    ),
+                  ),
+                );
+              }).toList();
+            }(),
           ),
           // User position marker
           if (widget.userPosition != null && !_isOutsideMumbai)
@@ -923,11 +943,109 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
     );
   }
 
+  bool _isWithin2Hours(LiveTrainEntry train) {
+    final String? expectedStr = train.expectedDepartureTime ?? train.expectedArrivalTime;
+    DateTime? trainTime;
+    if (expectedStr != null) {
+      trainTime = DateTime.tryParse(expectedStr);
+    }
+    if (trainTime == null) {
+      final String? scheduled = train.scheduledDeparture ?? train.scheduledArrival;
+      if (scheduled != null) {
+        trainTime = DateTime.tryParse(scheduled);
+        if (trainTime == null) {
+          final parts = scheduled.trim().split(':');
+          if (parts.length >= 2) {
+            final hour = int.tryParse(parts[0]);
+            final minute = int.tryParse(parts[1]);
+            if (hour != null && minute != null) {
+              final now = DateTime.now();
+              trainTime = DateTime(now.year, now.month, now.day, hour, minute);
+            }
+          }
+        }
+      }
+    }
+    
+    if (trainTime == null) return true; // Default to showing it
+
+    final now = DateTime.now();
+    // Allow trains that departed up to 10 minutes ago up to 2 hours from now
+    final minTime = now.subtract(const Duration(minutes: 10));
+    final maxTime = now.add(const Duration(hours: 2));
+    
+    return trainTime.isAfter(minTime) && trainTime.isBefore(maxTime);
+  }
+
+  int _getMinutesSinceMidnight(String timeStr) {
+    if (timeStr.isEmpty) return 0;
+    try {
+      if (timeStr.contains('T')) {
+        final dt = DateTime.tryParse(timeStr);
+        if (dt != null) {
+          return dt.hour * 60 + dt.minute;
+        }
+      }
+      final parts = timeStr.trim().split(':');
+      if (parts.length >= 2) {
+        final hour = int.tryParse(parts[0]) ?? 0;
+        final minute = int.tryParse(parts[1]) ?? 0;
+        return hour * 60 + minute;
+      }
+    } catch (_) {}
+    return 0;
+  }
+
+  int _getHourFromTimeStr(String timeStr) {
+    if (timeStr.isEmpty) return 0;
+    try {
+      if (timeStr.contains('T')) {
+        final dt = DateTime.tryParse(timeStr);
+        if (dt != null) {
+          return dt.hour;
+        }
+      }
+      final parts = timeStr.trim().split(':');
+      if (parts.isNotEmpty) {
+        return int.tryParse(parts[0]) ?? 0;
+      }
+    } catch (_) {}
+    return 0;
+  }
+
+  String _formatTo12Hour(String timeStr) {
+    if (timeStr.isEmpty) return '';
+    try {
+      if (timeStr.contains('T')) {
+        final dt = DateTime.parse(timeStr);
+        int hour = dt.hour;
+        final int minute = dt.minute;
+        final String period = hour >= 12 ? 'PM' : 'AM';
+        hour = hour % 12;
+        if (hour == 0) hour = 12;
+        final String minStr = minute.toString().padLeft(2, '0');
+        return '$hour:$minStr $period';
+      }
+
+      final parts = timeStr.trim().split(':');
+      if (parts.length >= 2) {
+        int hour = int.parse(parts[0]);
+        final int minute = int.parse(parts[1]);
+        final String period = hour >= 12 ? 'PM' : 'AM';
+        hour = hour % 12;
+        if (hour == 0) hour = 12;
+        final String minStr = minute.toString().padLeft(2, '0');
+        return '$hour:$minStr $period';
+      }
+    } catch (_) {}
+    return timeStr;
+  }
+
   Widget _buildDepartureRow(LiveTrainEntry train, MumbaiStation station) {
     final String? scheduled = train.scheduledDeparture ?? train.scheduledArrival;
     
     // Determine the text to display on the right
-    String timeText = scheduled ?? '';
+    String timeText = scheduled != null ? _formatTo12Hour(scheduled) : '';
     if (train.liveType == 'at-station') {
       timeText = 'At Platform';
     } else {
@@ -941,7 +1059,7 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
           } else if (difference.inMinutes < 60) {
             timeText = 'In ${difference.inMinutes} min';
           } else {
-            timeText = '${expectedTime.hour.toString().padLeft(2, '0')}:${expectedTime.minute.toString().padLeft(2, '0')}';
+            timeText = _formatTo12Hour(expectedStr);
           }
         } catch (_) {}
       }
@@ -1032,13 +1150,48 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
             ),
           ),
 
-          // Departure time/status
-          Text(
-            timeText,
-            style: GoogleFonts.outfit(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: const Color(0xFF475569),
+          // Align F/S badges vertically by wrapping in a fixed-width container
+          SizedBox(
+            width: 32,
+            child: isLocalTrain(train)
+                ? Center(
+                    child: Container(
+                      width: 18,
+                      height: 18,
+                      decoration: BoxDecoration(
+                        color: isFastLocal(train) ? const Color(0xFFEF4444) : const Color(0xFF10B981),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Center(
+                        child: Text(
+                          isFastLocal(train) ? 'F' : 'S',
+                          style: GoogleFonts.outfit(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
+          const SizedBox(width: 8),
+
+          // Align departure times vertically by wrapping in a fixed-width container
+          SizedBox(
+            width: 80,
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                timeText,
+                style: GoogleFonts.outfit(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: const Color(0xFF475569),
+                ),
+                maxLines: 1,
+              ),
             ),
           ),
         ],
@@ -1227,13 +1380,12 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
     final station = _selectedStation!;
     final lines = MumbaiStationData.getLinesForStation(station.code);
     
-    // Group the departures into Local and Express
-    final localTrains = _selectedStationDepartures.where((t) => isLocalTrain(t)).toList();
-    final expressTrains = _selectedStationDepartures.where((t) => !isLocalTrain(t)).toList();
+    // Group the departures into Local and Express, filtering to only show trains from now to 2 hours
+    final localTrains = _selectedStationDepartures.where((t) => isLocalTrain(t) && _isWithin2Hours(t)).toList();
+    final expressTrains = _selectedStationDepartures.where((t) => !isLocalTrain(t) && _isWithin2Hours(t)).toList();
 
     return Column(
       children: [
-        // 1. Station Name Header
         GestureDetector(
           onVerticalDragUpdate: (details) {
             final currentExtent = _sheetController.size;
@@ -1264,170 +1416,176 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
             );
           },
           behavior: HitTestBehavior.opaque,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-            child: Row(
-              children: [
-                // MRT / Station Icon
-                Container(
-                  width: 40,
-                  height: 40,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 1. Station Name Header
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+                child: Row(
+                  children: [
+                    // MRT / Station Icon
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE91E63), // Pink style
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(
+                            LucideIcons.train,
+                            size: 16,
+                            color: Colors.white,
+                          ),
+                          Text(
+                            'MRT',
+                            style: GoogleFonts.outfit(
+                              fontSize: 8,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.white,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    
+                    // Station Name & Active Lines
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            station.name,
+                            style: GoogleFonts.outfit(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 4),
+                          Row(
+                            children: lines
+                                .map((line) => Padding(
+                                      padding: const EdgeInsets.only(right: 6),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 6, vertical: 1.5),
+                                        decoration: BoxDecoration(
+                                          color: line.color,
+                                          borderRadius: BorderRadius.circular(4),
+                                          border: Border.all(color: Colors.white.withValues(alpha: 0.5), width: 1),
+                                        ),
+                                        child: Text(
+                                          line.shortCode,
+                                          style: GoogleFonts.outfit(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w800,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ),
+                                    ))
+                                .toList(),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // Close / Back button in card
+                    IconButton(
+                      icon: const Icon(LucideIcons.x, color: Colors.white, size: 20),
+                      onPressed: () {
+                        setState(() {
+                          _selectedStation = null;
+                          _selectedStationDepartures = [];
+                          _departuresRefreshTimer?.cancel();
+                          _isTimetableMode = false;
+                          _selectedStationTimetable = [];
+                          _isLoadingTimetable = false;
+                          _timetableError = null;
+                        });
+                        _mapController.move(_effectivePosition, 13.0);
+                      },
+                    ),
+                  ],
+                ),
+              ),
+
+              // 2. Custom segmented tabs capsule: Now / Timetable
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                child: Container(
+                  height: 38,
                   decoration: BoxDecoration(
-                    color: const Color(0xFFE91E63), // Pink style
+                    color: const Color(0xFF11754D), // Capsule background
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                  child: Row(
                     children: [
-                      const Icon(
-                        LucideIcons.train,
-                        size: 16,
-                        color: Colors.white,
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _isTimetableMode = false;
+                            });
+                          },
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: !_isTimetableMode ? Colors.white : Colors.transparent,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Center(
+                              child: Text(
+                                'Now',
+                                style: GoogleFonts.outfit(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: !_isTimetableMode ? const Color(0xFF11754D) : Colors.white.withValues(alpha: 0.8),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
-                      Text(
-                        'MRT',
-                        style: GoogleFonts.outfit(
-                          fontSize: 8,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.white,
-                          letterSpacing: 0.5,
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _isTimetableMode = true;
+                            });
+                            if (_selectedStationTimetable.isEmpty) {
+                              _fetchSelectedStationTimetable();
+                            }
+                          },
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: _isTimetableMode ? Colors.white : Colors.transparent,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Center(
+                              child: Text(
+                                'Timetable',
+                                style: GoogleFonts.outfit(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: _isTimetableMode ? const Color(0xFF11754D) : Colors.white.withValues(alpha: 0.8),
+                                ),
+                              ),
+                            ),
+                          ),
                         ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(width: 12),
-                
-                // Station Name & Active Lines
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        station.name,
-                        style: GoogleFonts.outfit(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 4),
-                      Row(
-                        children: lines
-                            .map((line) => Padding(
-                                  padding: const EdgeInsets.only(right: 6),
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 6, vertical: 1.5),
-                                    decoration: BoxDecoration(
-                                      color: line.color,
-                                      borderRadius: BorderRadius.circular(4),
-                                      border: Border.all(color: Colors.white.withValues(alpha: 0.5), width: 1),
-                                    ),
-                                    child: Text(
-                                      line.shortCode,
-                                      style: GoogleFonts.outfit(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w800,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ),
-                                ))
-                            .toList(),
-                      ),
-                    ],
-                  ),
-                ),
-
-                // Close / Back button in card
-                IconButton(
-                  icon: const Icon(LucideIcons.x, color: Colors.white, size: 20),
-                  onPressed: () {
-                    setState(() {
-                      _selectedStation = null;
-                      _selectedStationDepartures = [];
-                      _departuresRefreshTimer?.cancel();
-                      _isTimetableMode = false;
-                      _selectedStationTimetable = [];
-                      _isLoadingTimetable = false;
-                      _timetableError = null;
-                    });
-                    _mapController.move(_effectivePosition, 13.0);
-                  },
-                ),
-              ],
-            ),
-          ),
-        ),
-
-        // 2. Custom segmented tabs capsule: Now / Timetable
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-          child: Container(
-            height: 38,
-            decoration: BoxDecoration(
-              color: const Color(0xFF11754D), // Capsule background
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: GestureDetector(
-                    onTap: () {
-                      setState(() {
-                        _isTimetableMode = false;
-                      });
-                    },
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: !_isTimetableMode ? Colors.white : Colors.transparent,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Center(
-                        child: Text(
-                          'Now',
-                          style: GoogleFonts.outfit(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                            color: !_isTimetableMode ? const Color(0xFF11754D) : Colors.white.withValues(alpha: 0.8),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                Expanded(
-                  child: GestureDetector(
-                    onTap: () {
-                      setState(() {
-                        _isTimetableMode = true;
-                      });
-                      if (_selectedStationTimetable.isEmpty) {
-                        _fetchSelectedStationTimetable();
-                      }
-                    },
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: _isTimetableMode ? Colors.white : Colors.transparent,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Center(
-                        child: Text(
-                          'Timetable',
-                          style: GoogleFonts.outfit(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                            color: _isTimetableMode ? const Color(0xFF11754D) : Colors.white.withValues(alpha: 0.8),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
 
@@ -1573,70 +1731,94 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
 
   Widget _buildTimetableListView(ScrollController scrollController) {
     if (_isLoadingTimetable && _selectedStationTimetable.isEmpty) {
-      return const Center(
-        child: Padding(
-          padding: EdgeInsets.symmetric(vertical: 40),
-          child: CircularProgressIndicator(
-            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+      return ListView(
+        controller: scrollController,
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(
+            height: MediaQuery.of(context).size.height * 0.4,
+            child: const Center(
+              child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+              ),
+            ),
           ),
-        ),
+        ],
       );
     }
     
     if (_timetableError != null && _selectedStationTimetable.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(LucideIcons.wifiOff, color: Colors.white70, size: 36),
-              const SizedBox(height: 12),
-              Text(
-                'Failed to load timetable',
-                style: GoogleFonts.outfit(
-                  fontSize: 14,
-                  color: Colors.white,
-                  fontWeight: FontWeight.w600,
+      return ListView(
+        controller: scrollController,
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(
+            height: MediaQuery.of(context).size.height * 0.4,
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(LucideIcons.wifiOff, color: Colors.white70, size: 36),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Failed to load timetable',
+                      style: GoogleFonts.outfit(
+                        fontSize: 14,
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _timetableError!,
+                      style: GoogleFonts.outfit(
+                        fontSize: 12,
+                        color: Colors.white70,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 16),
+                    ElevatedButton(
+                      onPressed: _fetchSelectedStationTimetable,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: const Color(0xFF19A66E),
+                      ),
+                      child: const Text('Retry'),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 4),
-              Text(
-                _timetableError!,
-                style: GoogleFonts.outfit(
-                  fontSize: 12,
-                  color: Colors.white70,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: _fetchSelectedStationTimetable,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: const Color(0xFF19A66E),
-                ),
-                child: const Text('Retry'),
-              ),
-            ],
+            ),
           ),
-        ),
+        ],
       );
     }
 
     if (_selectedStationTimetable.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 40),
-          child: Text(
-            'No scheduled trains found.',
-            style: GoogleFonts.outfit(
-              fontSize: 14,
-              color: Colors.white70,
-              fontWeight: FontWeight.w500,
+      return ListView(
+        controller: scrollController,
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(
+            height: MediaQuery.of(context).size.height * 0.4,
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 40),
+                child: Text(
+                  'No scheduled trains found.',
+                  style: GoogleFonts.outfit(
+                    fontSize: 14,
+                    color: Colors.white70,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
             ),
           ),
-        ),
+        ],
       );
     }
 
@@ -1647,22 +1829,19 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
     for (final train in _selectedStationTimetable) {
       final timeStr = train.scheduledDeparture ?? train.scheduledArrival ?? '';
       if (timeStr.isEmpty) continue;
-      final parts = timeStr.split(':');
-      if (parts.isNotEmpty) {
-        final hour = int.tryParse(parts[0]) ?? 0;
-        if (hour < 12) {
-          morningTrains.add(train);
-        } else {
-          eveningTrains.add(train);
-        }
+      final hour = _getHourFromTimeStr(timeStr);
+      if (hour < 12) {
+        morningTrains.add(train);
+      } else {
+        eveningTrains.add(train);
       }
     }
 
-    // Sort chronologically
+    // Sort chronologically (using minutes since midnight for correct numerical/time sorting)
     int timeCompare(LiveTrainEntry a, LiveTrainEntry b) {
       final timeA = a.scheduledDeparture ?? a.scheduledArrival ?? '';
       final timeB = b.scheduledDeparture ?? b.scheduledArrival ?? '';
-      return timeA.compareTo(timeB);
+      return _getMinutesSinceMidnight(timeA).compareTo(_getMinutesSinceMidnight(timeB));
     }
     morningTrains.sort(timeCompare);
     eveningTrains.sort(timeCompare);
@@ -1742,7 +1921,7 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
     final String? scheduled = train.scheduledDeparture ?? train.scheduledArrival;
     
     // Determine the text to display on the right
-    String timeText = scheduled ?? '';
+    String timeText = scheduled != null ? _formatTo12Hour(scheduled) : '';
     if (train.liveType == 'at-station') {
       timeText = 'At Platform';
     } else {
@@ -1756,7 +1935,7 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
           } else if (difference.inMinutes < 60) {
             timeText = 'In ${difference.inMinutes} min';
           } else {
-            timeText = '${expectedTime.hour.toString().padLeft(2, '0')}:${expectedTime.minute.toString().padLeft(2, '0')}';
+            timeText = _formatTo12Hour(expectedStr);
           }
         } catch (_) {}
       }
@@ -1769,17 +1948,10 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
       color: Colors.transparent,
       child: InkWell(
         onTap: () {
-          showModalBottomSheet(
-            context: context,
-            isScrollControlled: true,
-            backgroundColor: Colors.transparent,
-            useSafeArea: true,
-            builder: (_) => DraggableScrollableSheet(
-              initialChildSize: 0.65,
-              minChildSize: 0.4,
-              maxChildSize: 0.95,
-              expand: false,
-              builder: (_, sc) => TrainDetailSheet(train: train),
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => TrainDetailScreen(train: train),
             ),
           );
         },
@@ -1870,13 +2042,48 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
             ),
           ),
 
-          // Departure time/status
-          Text(
-            timeText,
-            style: GoogleFonts.outfit(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: const Color(0xFF475569),
+          // Align F/S badges vertically by wrapping in a fixed-width container
+          SizedBox(
+            width: 32,
+            child: isLocalTrain(train)
+                ? Center(
+                    child: Container(
+                      width: 18,
+                      height: 18,
+                      decoration: BoxDecoration(
+                        color: isFastLocal(train) ? const Color(0xFFEF4444) : const Color(0xFF10B981),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Center(
+                        child: Text(
+                          isFastLocal(train) ? 'F' : 'S',
+                          style: GoogleFonts.outfit(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
+          const SizedBox(width: 8),
+
+          // Align departure times vertically by wrapping in a fixed-width container
+          SizedBox(
+            width: 80,
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                timeText,
+                style: GoogleFonts.outfit(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: const Color(0xFF475569),
+                ),
+                maxLines: 1,
+              ),
             ),
           ),
         ],

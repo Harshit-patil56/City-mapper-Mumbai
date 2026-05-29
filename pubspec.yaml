@@ -41,6 +41,7 @@ dependencies:
   http: ^1.2.0
   google_fonts: ^8.1.0
   shared_preferences: ^2.3.5
+  timelines_plus: ^2.0.0
 
 dev_dependencies:
   flutter_test:
