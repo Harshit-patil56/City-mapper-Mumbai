@@ -483,7 +483,7 @@ class _TrainDetailScreenState extends State<TrainDetailScreen>
                 clipBehavior: Clip.hardEdge,
                 decoration: const BoxDecoration(
                   color: _bg,
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(10)),
                   boxShadow: [
                     BoxShadow(
                       color: Colors.black12,
@@ -826,7 +826,16 @@ class _TrainDetailScreenState extends State<TrainDetailScreen>
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2.5),
                         decoration: BoxDecoration(
-                          color: isFastLocal(widget.train) ? const Color(0xFFEF4444) : const Color(0xFF10B981),
+                          color: () {
+                            final name = widget.train.trainName.toUpperCase();
+                            if (name.contains('AC') || name.contains('A.C.')) {
+                              return const Color(0xFF2F80ED); // AC Blue
+                            } else if (name.contains('LADIES') || name.contains('LADY') || name.contains('LDS')) {
+                              return const Color(0xFFE91E63); // Ladies Pink
+                            } else {
+                              return isFastLocal(widget.train) ? const Color(0xFFEF4444) : const Color(0xFF10B981);
+                            }
+                          }(),
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
@@ -1101,7 +1110,7 @@ class _InfoChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
         color: lineColor.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         border: Border.all(
             color: lineColor.withValues(alpha: 0.25)),
       ),

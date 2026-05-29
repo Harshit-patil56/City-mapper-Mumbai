@@ -7,6 +7,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 import '../data/mumbai_stations.dart';
 import '../services/api_service.dart';
 import 'widgets/train_detail_sheet.dart';
+import 'station_search_screen.dart';
 
 /// Full-screen train stations explorer with two tabs:
 ///   - **Stations**: Nearby stations sorted by GPS distance
@@ -63,16 +64,31 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
   List<LiveTrainEntry> _selectedStationTimetable = [];
   bool _isLoadingTimetable = false;
   String? _timetableError;
+  String _selectedDirection = 'ALL';
+  ScrollController? _timetableScrollController;
 
   // mIndicator disruption data for the selected station
   List<MIndicatorAlert> _stationAlerts = [];
   List<MIndicatorCancelledTrain> _cancelledTrains = [];
   Set<String> _dismissedAlertIds = {};
 
+  // Route Planner State
+  MumbaiStation? _routeFromStation;
+  MumbaiStation? _routeToStation;
+  bool _isLoadingRoutes = false;
+  String? _routesError;
+  List<PlannedTripItinerary> _plannedTrips = [];
+  bool _selectedFilterAC = false;
+  bool _selectedFilterFast = false;
+  bool _selectedFilterLadies = false;
+  final Set<String> _expandedLegKeys = {};
+  final Map<String, List<RailGadiTrainStop>> _trainStopsCache = {};
+  final Map<String, bool> _loadingStops = {};
+
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
     _tabController.addListener(() {
       if (mounted) {
         setState(() {});
@@ -102,6 +118,10 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
       _effectivePosition.longitude,
       limit: 10,
     );
+
+    if (_nearbyStations.isNotEmpty) {
+      _routeFromStation = _nearbyStations.first.station;
+    }
 
     _loadDeparturesForNearby();
   }
@@ -149,6 +169,8 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
       _selectedStationTimetable = [];
       _isLoadingTimetable = false;
       _timetableError = null;
+      _selectedDirection = 'ALL';
+      _timetableScrollController = null;
     });
     
     // Zoom and center map to selected station
@@ -209,6 +231,8 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
         _selectedStationTimetable = response;
         _isLoadingTimetable = false;
       });
+      final sortedFiltered = _getSortedFilteredTimetable();
+      _scrollToCurrentTimetable(sortedFiltered);
     } catch (e) {
       if (_selectedStation?.code != station.code) return; // stale request
       setState(() {
@@ -216,6 +240,172 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
         _isLoadingTimetable = false;
       });
     }
+  }
+
+  String getTrainDirection(LiveTrainEntry train, MumbaiStation selectedStation) {
+    final lineStations = MumbaiStationData.getStationsByLine(selectedStation.line);
+    final selectedIdx = lineStations.indexWhere((s) => s.code.toUpperCase() == selectedStation.code.toUpperCase());
+    final destIdx = lineStations.indexWhere((s) => s.code.toUpperCase() == train.destinationStation.toUpperCase());
+    
+    if (selectedIdx != -1 && destIdx != -1) {
+      if (destIdx < selectedIdx) {
+        return 'UP';
+      } else if (destIdx > selectedIdx) {
+        return 'DOWN';
+      }
+    }
+    
+    final destUpper = train.destinationStation.toUpperCase();
+    if (destUpper == 'CSMT' || destUpper == 'CSTM' || destUpper == 'CCG' || destUpper == 'BYC' || destUpper == 'DR' || destUpper == 'DDR' || destUpper == 'CLA' || destUpper == 'VDLR') {
+      return 'UP';
+    }
+    return 'DOWN';
+  }
+
+  int _findNextUpcomingTrainIndex(List<LiveTrainEntry> trains) {
+    final now = DateTime.now();
+    final nowMinutes = now.hour * 60 + now.minute;
+    for (int i = 0; i < trains.length; i++) {
+      final timeStr = trains[i].scheduledDeparture ?? trains[i].scheduledArrival ?? '';
+      if (_getMinutesSinceMidnight(timeStr) >= nowMinutes) {
+        return i;
+      }
+    }
+    return 0;
+  }
+
+  void _scrollToCurrentTimetable(List<LiveTrainEntry> filteredTrains) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final sc = _timetableScrollController;
+      if (sc != null && sc.hasClients) {
+        final upcomingIdx = _findNextUpcomingTrainIndex(filteredTrains);
+        if (upcomingIdx > 0) {
+          final target = (44.0 + (upcomingIdx * 68.0)).clamp(0.0, sc.position.maxScrollExtent);
+          sc.animateTo(
+            target,
+            duration: const Duration(milliseconds: 500),
+            curve: Curves.easeOutCubic,
+          );
+        }
+      }
+    });
+  }
+
+  List<LiveTrainEntry> _getSortedFilteredTimetable() {
+    final sortedTrains = List<LiveTrainEntry>.from(_selectedStationTimetable);
+    sortedTrains.sort((a, b) {
+      final timeA = a.scheduledDeparture ?? a.scheduledArrival ?? '';
+      final timeB = b.scheduledDeparture ?? b.scheduledArrival ?? '';
+      return _getMinutesSinceMidnight(timeA).compareTo(_getMinutesSinceMidnight(timeB));
+    });
+
+    if (_selectedDirection == 'ALL') {
+      return sortedTrains;
+    }
+
+    return sortedTrains.where((train) {
+      final dir = getTrainDirection(train, _selectedStation!);
+      return dir == _selectedDirection;
+    }).toList();
+  }
+
+  List<LiveTrainEntry> _getSortedFilteredTimetableForDir(String dir) {
+    final sortedTrains = List<LiveTrainEntry>.from(_selectedStationTimetable);
+    sortedTrains.sort((a, b) {
+      final timeA = a.scheduledDeparture ?? a.scheduledArrival ?? '';
+      final timeB = b.scheduledDeparture ?? b.scheduledArrival ?? '';
+      return _getMinutesSinceMidnight(timeA).compareTo(_getMinutesSinceMidnight(timeB));
+    });
+
+    if (dir == 'ALL') {
+      return sortedTrains;
+    }
+
+    return sortedTrains.where((train) {
+      final trainDir = getTrainDirection(train, _selectedStation!);
+      return trainDir == dir;
+    }).toList();
+  }
+
+  Widget _buildDirectionFilterChips() {
+    final line = _selectedStation?.line ?? TrainLine.central;
+    final String upLabel = line == TrainLine.western ? 'Towards Churchgate' : 'Towards CSMT';
+    final String downLabel = line == TrainLine.western 
+        ? 'Towards Virar/Dahanu' 
+        : (line == TrainLine.central ? 'Towards Kasara/Karjat' : 'Towards Panvel/Goregaon');
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      color: const Color(0xFF19A66E),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            _buildFilterChip('ALL', 'All Directions', line.color),
+            const SizedBox(width: 8),
+            _buildFilterChip('UP', upLabel, line.color),
+            const SizedBox(width: 8),
+            _buildFilterChip('DOWN', downLabel, line.color),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFilterChip(String value, String label, Color lineColor) {
+    final isSelected = _selectedDirection == value;
+    return GestureDetector(
+      onTap: () {
+        final filtered = _getSortedFilteredTimetableForDir(value);
+        setState(() {
+          _selectedDirection = value;
+        });
+        _scrollToCurrentTimetable(filtered);
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? lineColor : const Color(0xFF11754D),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isSelected ? Colors.white.withValues(alpha: 0.8) : Colors.transparent,
+            width: 1,
+          ),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: lineColor.withValues(alpha: 0.4),
+                    blurRadius: 4,
+                    offset: const Offset(0, 2),
+                  )
+                ]
+              : null,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              value == 'ALL'
+                  ? LucideIcons.compass
+                  : (value == 'UP' ? LucideIcons.arrowDown : LucideIcons.arrowUp),
+              size: 14,
+              color: Colors.white,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: GoogleFonts.outfit(
+                fontSize: 12.5,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                color: Colors.white,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _startSelectedStationAutoRefresh() {
@@ -345,8 +535,8 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
                     decoration: const BoxDecoration(
                       color: Color(0xFF19A66E), // Green main card
                       borderRadius: BorderRadius.only(
-                        topLeft: Radius.circular(12),
-                        topRight: Radius.circular(12),
+                        topLeft: Radius.circular(10),
+                        topRight: Radius.circular(10),
                       ),
                     ),
                     child: _selectedStation != null
@@ -400,6 +590,7 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
                                     controller: _tabController,
                                     children: [
                                       _buildStationsTab(scrollController),
+                                      _buildRoutePlannerTab(scrollController),
                                       _buildLinesTab(scrollController),
                                     ],
                                   ),
@@ -579,8 +770,8 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
       decoration: const BoxDecoration(
         color: Color(0xFF19A66E),
         borderRadius: BorderRadius.only(
-          topLeft: Radius.circular(12),
-          topRight: Radius.circular(12),
+          topLeft: Radius.circular(10),
+          topRight: Radius.circular(10),
         ),
       ),
       child: Column(
@@ -595,7 +786,7 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
                   height: 38,
                   decoration: BoxDecoration(
                     color: const Color(0xFFE91E63), // Pink MRT style
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(10),
                   ),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -628,13 +819,13 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
               height: 38,
               decoration: BoxDecoration(
                 color: const Color(0xFF11754D), // Solid dark green base like the "Now" control
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(10),
               ),
               child: TabBar(
                 controller: _tabController,
                 indicator: BoxDecoration(
                   color: Colors.white, // White active capsule, like "Now"
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(10),
                 ),
                 indicatorSize: TabBarIndicatorSize.tab,
                 dividerColor: Colors.transparent,
@@ -657,6 +848,22 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
                         const SizedBox(width: 6),
                         Text(
                           'Stations',
+                          style: GoogleFonts.outfit(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Tab(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(LucideIcons.navigation, size: 14),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Route',
                           style: GoogleFonts.outfit(
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
@@ -788,7 +995,7 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
         margin: const EdgeInsets.only(bottom: 14),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(10),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.08),
@@ -811,7 +1018,7 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
                     height: 38,
                     decoration: BoxDecoration(
                       color: const Color(0xFFE91E63), // Pink MRT style
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(10),
                     ),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -996,22 +1203,7 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
     return 0;
   }
 
-  int _getHourFromTimeStr(String timeStr) {
-    if (timeStr.isEmpty) return 0;
-    try {
-      if (timeStr.contains('T')) {
-        final dt = DateTime.tryParse(timeStr);
-        if (dt != null) {
-          return dt.hour;
-        }
-      }
-      final parts = timeStr.trim().split(':');
-      if (parts.isNotEmpty) {
-        return int.tryParse(parts[0]) ?? 0;
-      }
-    } catch (_) {}
-    return 0;
-  }
+
 
   String _formatTo12Hour(String timeStr) {
     if (timeStr.isEmpty) return '';
@@ -1159,7 +1351,16 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
                       width: 18,
                       height: 18,
                       decoration: BoxDecoration(
-                        color: isFastLocal(train) ? const Color(0xFFEF4444) : const Color(0xFF10B981),
+                        color: () {
+                          final name = train.trainName.toUpperCase();
+                          if (name.contains('AC') || name.contains('A.C.')) {
+                            return const Color(0xFF2F80ED); // AC Blue
+                          } else if (name.contains('LADIES') || name.contains('LADY') || name.contains('LDS')) {
+                            return const Color(0xFFE91E63); // Ladies Pink
+                          } else {
+                            return isFastLocal(train) ? const Color(0xFFEF4444) : const Color(0xFF10B981);
+                          }
+                        }(),
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Center(
@@ -1203,7 +1404,7 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
 
   Widget _buildLinesTab(ScrollController sheetController) {
     return ListView(
-      controller: _tabController.index == 1 ? sheetController : null,
+      controller: _tabController.index == 2 ? sheetController : null,
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
       children: TrainLine.values.map((line) {
@@ -1214,7 +1415,7 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
           margin: const EdgeInsets.only(bottom: 10),
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(10),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.05),
@@ -1430,7 +1631,7 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
                       height: 40,
                       decoration: BoxDecoration(
                         color: const Color(0xFFE91E63), // Pink style
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(10),
                       ),
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -1524,7 +1725,7 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
                   height: 38,
                   decoration: BoxDecoration(
                     color: const Color(0xFF11754D), // Capsule background
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(10),
                   ),
                   child: Row(
                     children: [
@@ -1538,7 +1739,7 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
                           child: Container(
                             decoration: BoxDecoration(
                               color: !_isTimetableMode ? Colors.white : Colors.transparent,
-                              borderRadius: BorderRadius.circular(8),
+                              borderRadius: BorderRadius.circular(10),
                             ),
                             child: Center(
                               child: Text(
@@ -1558,15 +1759,19 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
                           onTap: () {
                             setState(() {
                               _isTimetableMode = true;
+                              _selectedDirection = 'ALL';
                             });
                             if (_selectedStationTimetable.isEmpty) {
                               _fetchSelectedStationTimetable();
+                            } else {
+                              final sortedFiltered = _getSortedFilteredTimetable();
+                              _scrollToCurrentTimetable(sortedFiltered);
                             }
                           },
                           child: Container(
                             decoration: BoxDecoration(
                               color: _isTimetableMode ? Colors.white : Colors.transparent,
-                              borderRadius: BorderRadius.circular(8),
+                              borderRadius: BorderRadius.circular(10),
                             ),
                             child: Center(
                               child: Text(
@@ -1688,7 +1893,7 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.05),
@@ -1707,8 +1912,8 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
             decoration: const BoxDecoration(
               color: Color(0xFFF8FAFC), // Lighter slate gray
               borderRadius: BorderRadius.only(
-                topLeft: Radius.circular(12),
-                topRight: Radius.circular(12),
+                topLeft: Radius.circular(10),
+                topRight: Radius.circular(10),
               ),
             ),
             child: Text(
@@ -1730,190 +1935,148 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
   }
 
   Widget _buildTimetableListView(ScrollController scrollController) {
+    _timetableScrollController = scrollController;
+
     if (_isLoadingTimetable && _selectedStationTimetable.isEmpty) {
-      return ListView(
-        controller: scrollController,
-        physics: const AlwaysScrollableScrollPhysics(),
-        children: [
-          SizedBox(
-            height: MediaQuery.of(context).size.height * 0.4,
-            child: const Center(
-              child: CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-              ),
-            ),
-          ),
-        ],
+      return const Center(
+        child: CircularProgressIndicator(
+          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+        ),
       );
     }
     
     if (_timetableError != null && _selectedStationTimetable.isEmpty) {
-      return ListView(
-        controller: scrollController,
-        physics: const AlwaysScrollableScrollPhysics(),
-        children: [
-          SizedBox(
-            height: MediaQuery.of(context).size.height * 0.4,
-            child: Center(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(LucideIcons.wifiOff, color: Colors.white70, size: 36),
+              const SizedBox(height: 12),
+              Text(
+                'Failed to load timetable',
+                style: GoogleFonts.outfit(
+                  fontSize: 14,
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _timetableError!,
+                style: GoogleFonts.outfit(
+                  fontSize: 12,
+                  color: Colors.white70,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _fetchSelectedStationTimetable,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: const Color(0xFF19A66E),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final filteredTrains = _getSortedFilteredTimetable();
+    final line = _selectedStation?.line ?? TrainLine.central;
+
+    return Column(
+      children: [
+        _buildDirectionFilterChips(),
+        Expanded(
+          child: filteredTrains.isEmpty
+              ? ListView(
+                  controller: scrollController,
+                  physics: const AlwaysScrollableScrollPhysics(),
                   children: [
-                    const Icon(LucideIcons.wifiOff, color: Colors.white70, size: 36),
-                    const SizedBox(height: 12),
-                    Text(
-                      'Failed to load timetable',
-                      style: GoogleFonts.outfit(
-                        fontSize: 14,
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
+                    SizedBox(
+                      height: MediaQuery.of(context).size.height * 0.4,
+                      child: Center(
+                        child: Text(
+                          'No scheduled trains match this direction.',
+                          style: GoogleFonts.outfit(
+                            fontSize: 14,
+                            color: Colors.white70,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      _timetableError!,
-                      style: GoogleFonts.outfit(
-                        fontSize: 12,
-                        color: Colors.white70,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 16),
-                    ElevatedButton(
-                      onPressed: _fetchSelectedStationTimetable,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white,
-                        foregroundColor: const Color(0xFF19A66E),
-                      ),
-                      child: const Text('Retry'),
                     ),
                   ],
-                ),
-              ),
-            ),
-          ),
-        ],
-      );
-    }
-
-    if (_selectedStationTimetable.isEmpty) {
-      return ListView(
-        controller: scrollController,
-        physics: const AlwaysScrollableScrollPhysics(),
-        children: [
-          SizedBox(
-            height: MediaQuery.of(context).size.height * 0.4,
-            child: Center(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 40),
-                child: Text(
-                  'No scheduled trains found.',
-                  style: GoogleFonts.outfit(
-                    fontSize: 14,
-                    color: Colors.white70,
-                    fontWeight: FontWeight.w500,
+                )
+              : SingleChildScrollView(
+                  controller: scrollController,
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(10),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.05),
+                          blurRadius: 6,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFF8FAFC),
+                            borderRadius: BorderRadius.only(
+                              topLeft: Radius.circular(10),
+                              topRight: Radius.circular(10),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(LucideIcons.calendar, size: 16, color: line.color),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Full Schedule',
+                                style: GoogleFonts.outfit(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: const Color(0xFF475569),
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                              const Spacer(),
+                              Text(
+                                '${filteredTrains.length} trains',
+                                style: GoogleFonts.outfit(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: const Color(0xFF94A3B8),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        ...filteredTrains.map((train) => _buildSelectedStationDepartureRow(train)),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-            ),
-          ),
-        ],
-      );
-    }
-
-    // Divide into morning (< 12) and evening (>= 12)
-    final morningTrains = <LiveTrainEntry>[];
-    final eveningTrains = <LiveTrainEntry>[];
-
-    for (final train in _selectedStationTimetable) {
-      final timeStr = train.scheduledDeparture ?? train.scheduledArrival ?? '';
-      if (timeStr.isEmpty) continue;
-      final hour = _getHourFromTimeStr(timeStr);
-      if (hour < 12) {
-        morningTrains.add(train);
-      } else {
-        eveningTrains.add(train);
-      }
-    }
-
-    // Sort chronologically (using minutes since midnight for correct numerical/time sorting)
-    int timeCompare(LiveTrainEntry a, LiveTrainEntry b) {
-      final timeA = a.scheduledDeparture ?? a.scheduledArrival ?? '';
-      final timeB = b.scheduledDeparture ?? b.scheduledArrival ?? '';
-      return _getMinutesSinceMidnight(timeA).compareTo(_getMinutesSinceMidnight(timeB));
-    }
-    morningTrains.sort(timeCompare);
-    eveningTrains.sort(timeCompare);
-
-    return ListView(
-      controller: scrollController,
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-      children: [
-        _buildTimetableSection('Morning Section (AM)', morningTrains, LucideIcons.sun),
-        const SizedBox(height: 16),
-        _buildTimetableSection('Evening Section (PM)', eveningTrains, LucideIcons.moon),
+        ),
       ],
-    );
-  }
-
-  Widget _buildTimetableSection(String title, List<LiveTrainEntry> trains, IconData icon) {
-    if (trains.isEmpty) return const SizedBox.shrink();
-
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: const BoxDecoration(
-              color: Color(0xFFF8FAFC),
-              borderRadius: BorderRadius.only(
-                topLeft: Radius.circular(12),
-                topRight: Radius.circular(12),
-              ),
-            ),
-            child: Row(
-              children: [
-                Icon(icon, size: 16, color: const Color(0xFF475569)),
-                const SizedBox(width: 8),
-                Text(
-                  title,
-                  style: GoogleFonts.outfit(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: const Color(0xFF475569),
-                    letterSpacing: 0.5,
-                  ),
-                ),
-                const Spacer(),
-                Text(
-                  '${trains.length} trains',
-                  style: GoogleFonts.outfit(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: const Color(0xFF94A3B8),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          ...trains.map((train) => _buildSelectedStationDepartureRow(train)),
-        ],
-      ),
     );
   }
 
@@ -2051,7 +2214,16 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
                       width: 18,
                       height: 18,
                       decoration: BoxDecoration(
-                        color: isFastLocal(train) ? const Color(0xFFEF4444) : const Color(0xFF10B981),
+                        color: () {
+                          final name = train.trainName.toUpperCase();
+                          if (name.contains('AC') || name.contains('A.C.')) {
+                            return const Color(0xFF2F80ED); // AC Blue
+                          } else if (name.contains('LADIES') || name.contains('LADY') || name.contains('LDS')) {
+                            return const Color(0xFFE91E63); // Ladies Pink
+                          } else {
+                            return isFastLocal(train) ? const Color(0xFFEF4444) : const Color(0xFF10B981);
+                          }
+                        }(),
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Center(
@@ -2133,9 +2305,1304 @@ class _TrainStationsScreenState extends State<TrainStationsScreen>
       ],
     );
   }
+
+  // ===========================================================================
+  // Route Planner Tab & Helper Methods
+  // ===========================================================================
+
+  Widget _buildRoutePlannerTab(ScrollController scrollController) {
+    final filteredTrips = _plannedTrips.where((trip) {
+      if (_selectedFilterAC) {
+        final anyNonAC = trip.legItineraries.any((leg) {
+          final name = leg.train.trainName.toUpperCase();
+          return !name.contains('AC') && !name.contains('A.C.');
+        });
+        if (anyNonAC) return false;
+      }
+      if (_selectedFilterFast) {
+        final anySlow = trip.legItineraries.any((leg) => !isFastLocal(leg.train));
+        if (anySlow) return false;
+      }
+      if (_selectedFilterLadies) {
+        final anyNonLadies = trip.legItineraries.any((leg) {
+          final name = leg.train.trainName.toUpperCase();
+          return !name.contains('LADIES') && !name.contains('LADY') && !name.contains('LDS');
+        });
+        if (anyNonLadies) return false;
+      }
+      return true;
+    }).toList();
+
+    return ListView(
+      controller: _tabController.index == 1 ? scrollController : null,
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      children: [
+        _buildUberSearchCard(),
+        _buildFilterChips(),
+        if (_isLoadingRoutes)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 40),
+            child: Center(
+              child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+              ),
+            ),
+          )
+        else if (_routesError != null)
+          _buildErrorState(_routesError!)
+        else if (_routeFromStation == null || _routeToStation == null)
+          _buildEmptyRouteState(
+            icon: LucideIcons.search,
+            message: "Select start and destination stations to plan your journey",
+          )
+        else if (_plannedTrips.isEmpty)
+          _buildEmptyRouteState(
+            icon: LucideIcons.train,
+            message: "No connections found. Try swapping directions or checking other stations.",
+          )
+        else if (filteredTrips.isEmpty)
+          _buildEmptyRouteState(
+            icon: LucideIcons.filter,
+            message: "No connections match your filters. Try disabling some filters.",
+          )
+        else
+          ...filteredTrips.map((trip) => _buildTripItineraryCard(trip)),
+      ],
+    );
+  }
+
+  Widget _buildFilterChips() {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+      child: Row(
+        children: [
+          _buildRouteFilterChip(
+            label: "AC Locals",
+            icon: LucideIcons.snowflake,
+            selected: _selectedFilterAC,
+            onTap: () {
+              setState(() {
+                _selectedFilterAC = !_selectedFilterAC;
+              });
+            },
+          ),
+          const SizedBox(width: 8),
+          _buildRouteFilterChip(
+            label: "Fast Trains",
+            icon: LucideIcons.zap,
+            selected: _selectedFilterFast,
+            onTap: () {
+              setState(() {
+                _selectedFilterFast = !_selectedFilterFast;
+              });
+            },
+          ),
+          const SizedBox(width: 8),
+          _buildRouteFilterChip(
+            label: "Ladies Special",
+            icon: LucideIcons.heart,
+            selected: _selectedFilterLadies,
+            onTap: () {
+              setState(() {
+                _selectedFilterLadies = !_selectedFilterLadies;
+              });
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRouteFilterChip({
+    required String label,
+    required IconData icon,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    final activeColor = const Color(0xFF19A66E);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? activeColor : Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: selected ? activeColor : const Color(0xFFCBD5E1),
+            width: 1,
+          ),
+          boxShadow: selected
+              ? [
+                  BoxShadow(
+                    color: activeColor.withValues(alpha: 0.2),
+                    blurRadius: 6,
+                    offset: const Offset(0, 2),
+                  ),
+                ]
+              : null,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 14,
+              color: selected ? Colors.white : const Color(0xFF64748B),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: GoogleFonts.outfit(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: selected ? Colors.white : const Color(0xFF475569),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildUberSearchCard() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.08),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Column(
+            children: [
+              Container(
+                width: 10,
+                height: 10,
+                decoration: const BoxDecoration(
+                  color: Color(0xFF10B981),
+                  shape: BoxShape.circle,
+                ),
+              ),
+              SizedBox(
+                width: 2,
+                height: 36,
+                child: Column(
+                  children: List.generate(4, (index) => Expanded(
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(vertical: 2),
+                      width: 2,
+                      color: const Color(0xFFCBD5E1),
+                    ),
+                  )),
+                ),
+              ),
+              Container(
+                width: 10,
+                height: 10,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFEF4444),
+                  shape: BoxShape.rectangle,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                InkWell(
+                  onTap: () async {
+                    final selected = await Navigator.push<MumbaiStation>(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => StationSearchScreen(
+                          title: "Select Start Station",
+                          userPosition: widget.userPosition,
+                        ),
+                      ),
+                    );
+                    if (selected != null) {
+                      setState(() {
+                        _routeFromStation = selected;
+                      });
+                      _calculateRouteItineraries();
+                    }
+                  },
+                  borderRadius: BorderRadius.circular(10),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF8FAFC),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'FROM',
+                          style: GoogleFonts.outfit(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: const Color(0xFF94A3B8),
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _routeFromStation?.name ?? 'Select starting station...',
+                          style: GoogleFonts.outfit(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: _routeFromStation != null ? const Color(0xFF1E293B) : const Color(0xFF94A3B8),
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                InkWell(
+                  onTap: () async {
+                    final selected = await Navigator.push<MumbaiStation>(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => StationSearchScreen(
+                          title: "Select Destination",
+                          userPosition: widget.userPosition,
+                        ),
+                      ),
+                    );
+                    if (selected != null) {
+                      setState(() {
+                        _routeToStation = selected;
+                      });
+                      _calculateRouteItineraries();
+                    }
+                  },
+                  borderRadius: BorderRadius.circular(10),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF8FAFC),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'TO',
+                          style: GoogleFonts.outfit(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: const Color(0xFF94A3B8),
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _routeToStation?.name ?? 'Select destination station...',
+                          style: GoogleFonts.outfit(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: _routeToStation != null ? const Color(0xFF1E293B) : const Color(0xFF94A3B8),
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          IconButton(
+            icon: const Icon(LucideIcons.arrowUpDown, color: Color(0xFF1E293B)),
+            onPressed: () {
+              setState(() {
+                final temp = _routeFromStation;
+                _routeFromStation = _routeToStation;
+                _routeToStation = temp;
+              });
+              _calculateRouteItineraries();
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyRouteState({required IconData icon, required String message}) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, size: 40, color: Colors.white.withValues(alpha: 0.7)),
+          const SizedBox(height: 12),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: GoogleFonts.outfit(
+              fontSize: 14,
+              color: Colors.white,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildErrorState(String error) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFEE2E2),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          const Icon(LucideIcons.alertCircle, color: Color(0xFFDC2626)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'Error loading connections: $error',
+              style: GoogleFonts.outfit(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: const Color(0xFFDC2626),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTripItineraryCard(PlannedTripItinerary trip) {
+    final firstLeg = trip.legItineraries.first;
+    final lastLeg = trip.legItineraries.last;
+    
+    final depTime12 = _formatTo12Hour(firstLeg.departureTime);
+    final arrTime12 = _formatTo12Hour(lastLeg.arrivalTime);
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    const Icon(LucideIcons.clock, size: 14, color: Color(0xFF64748B)),
+                    const SizedBox(width: 6),
+                    Text(
+                      '${trip.totalDurationMinutes} mins',
+                      style: GoogleFonts.outfit(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: const Color(0xFF1E293B),
+                      ),
+                    ),
+                  ],
+                ),
+                Text(
+                  '$depTime12 → $arrTime12',
+                  style: GoogleFonts.outfit(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: const Color(0xFF19A66E),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            _buildHorizontalPathPreview(trip),
+            const SizedBox(height: 12),
+            const Divider(color: Color(0xFFF1F5F9), height: 1),
+            const SizedBox(height: 12),
+            ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: trip.legItineraries.length,
+              separatorBuilder: (context, index) {
+                final nextLeg = trip.legItineraries[index + 1];
+                final junctionName = nextLeg.leg.start.name;
+                final l1 = trip.legItineraries[index].leg.line;
+                final l2 = nextLeg.leg.line;
+
+                String guidanceText = "Walk across foot overbridge (FOB) to change platforms.";
+                if (junctionName.toLowerCase().contains("dadar")) {
+                  if (l1 == TrainLine.central && l2 == TrainLine.western) {
+                    guidanceText = "Walk across FOB (Central Platforms 3-6 to Western Platforms 1-4) — ~4 min walk.";
+                  } else if (l1 == TrainLine.western && l2 == TrainLine.central) {
+                    guidanceText = "Walk across FOB (Western Platforms 1-4 to Central Platforms 3-6) — ~4 min walk.";
+                  }
+                } else if (junctionName.toLowerCase().contains("kurla")) {
+                  if (l1 == TrainLine.central && l2 == TrainLine.harbour) {
+                    guidanceText = "Walk across FOB (Central Platforms 7-8 to Harbour Platforms 1-2) — ~3 min walk.";
+                  } else if (l1 == TrainLine.harbour && l2 == TrainLine.central) {
+                    guidanceText = "Walk across FOB (Harbour Platforms 1-2 to Central Platforms 7-8) — ~3 min walk.";
+                  }
+                } else if (junctionName.toLowerCase().contains("bandra")) {
+                  guidanceText = "Walk across FOB to transfer between Western and Harbour lines — ~3 min walk.";
+                }
+
+                return Container(
+                  margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFE2E8F0)),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: const BoxDecoration(
+                          color: Color(0xFF64748B),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(LucideIcons.repeat, size: 12, color: Colors.white),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Transfer at $junctionName',
+                              style: GoogleFonts.outfit(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                color: const Color(0xFF1E293B),
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              guidanceText,
+                              style: GoogleFonts.outfit(
+                                fontSize: 11,
+                                color: const Color(0xFF475569),
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+              itemBuilder: (context, index) {
+                final legItin = trip.legItineraries[index];
+                final leg = legItin.leg;
+                final train = legItin.train;
+                final name = train.trainName.toUpperCase();
+                
+                final isAC = name.contains('AC') || name.contains('A.C.');
+                final isLadies = name.contains('LADIES') || name.contains('LADY') || name.contains('LDS');
+                final isFast = isFastLocal(train);
+
+                Color badgeColor = const Color(0xFF10B981);
+                if (isAC) {
+                  badgeColor = const Color(0xFF2F80ED);
+                } else if (isLadies) {
+                  badgeColor = const Color(0xFFE91E63);
+                } else if (isFast) {
+                  badgeColor = const Color(0xFFEF4444);
+                }
+
+                final legKey = "${train.trainNumber}_${leg.start.code}_${leg.end.code}";
+                final isExpanded = _expandedLegKeys.contains(legKey);
+
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4.0),
+                      child: InkWell(
+                        onTap: () => _toggleLegExpanded(train.trainNumber, leg.start.code, leg.end.code),
+                        borderRadius: BorderRadius.circular(10),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 6.0, horizontal: 4.0),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Container(
+                                width: 52,
+                                padding: const EdgeInsets.only(top: 2),
+                                child: Text(
+                                  _formatTo12Hour(legItin.departureTime),
+                                  style: GoogleFonts.outfit(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: const Color(0xFF475569),
+                                  ),
+                                ),
+                              ),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 6.0),
+                                child: Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                    color: _getLineColor(leg.line),
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            '${leg.start.name} → ${leg.end.name}',
+                                            style: GoogleFonts.outfit(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.bold,
+                                              color: const Color(0xFF1E293B),
+                                            ),
+                                          ),
+                                        ),
+                                        IconButton(
+                                          icon: const Icon(LucideIcons.externalLink, size: 14, color: Color(0xFF64748B)),
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(),
+                                          onPressed: () {
+                                            Navigator.push(
+                                              context,
+                                              MaterialPageRoute(
+                                                builder: (context) => TrainDetailScreen(train: train),
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Icon(
+                                          isExpanded ? LucideIcons.chevronUp : LucideIcons.chevronDown,
+                                          size: 14,
+                                          color: const Color(0xFF64748B),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Row(
+                                      children: [
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color: badgeColor,
+                                            borderRadius: BorderRadius.circular(10),
+                                          ),
+                                          child: Text(
+                                            isFast ? 'FAST' : 'SLOW',
+                                            style: GoogleFonts.outfit(
+                                              fontSize: 9,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.white,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          child: Text(
+                                            '${train.trainNumber} ${train.trainName} (${leg.stopsCount} stops, ~${leg.stopsCount * 2}m)',
+                                            style: GoogleFonts.outfit(
+                                              fontSize: 12,
+                                              color: const Color(0xFF64748B),
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    _buildLegStopsTimeline(leg, train),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHorizontalPathPreview(PlannedTripItinerary trip) {
+    final List<Widget> children = [];
+
+    // Add first station
+    final firstStation = trip.legItineraries.first.leg.start;
+    children.add(_buildPathStationCode(firstStation.code));
+
+    for (final legItin in trip.legItineraries) {
+      final leg = legItin.leg;
+      final color = _getLineColor(leg.line);
+      final lineLetter = leg.line == TrainLine.western
+          ? 'W'
+          : leg.line == TrainLine.central
+              ? 'C'
+              : 'H';
+
+      children.add(
+        Expanded(
+          child: Row(
+            children: [
+              Expanded(
+                child: Container(
+                  height: 2,
+                  color: color,
+                ),
+              ),
+              Container(
+                width: 18,
+                height: 18,
+                decoration: BoxDecoration(
+                  color: color,
+                  shape: BoxShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  lineLetter,
+                  style: GoogleFonts.outfit(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Container(
+                  height: 2,
+                  color: color,
+                ),
+              ),
+              const Icon(
+                Icons.chevron_right,
+                size: 14,
+                color: Color(0xFF94A3B8),
+              ),
+            ],
+          ),
+        ),
+      );
+
+      children.add(_buildPathStationCode(leg.end.code));
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(top: 8, bottom: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: children,
+      ),
+    );
+  }
+
+  Widget _buildPathStationCode(String code) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE2E8F0),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        code,
+        style: GoogleFonts.outfit(
+          fontSize: 11,
+          fontWeight: FontWeight.bold,
+          color: const Color(0xFF334155),
+        ),
+      ),
+    );
+  }
+
+  Color _getLineColor(TrainLine line) {
+    switch (line) {
+      case TrainLine.western:
+        return const Color(0xFF2F80ED);
+      case TrainLine.central:
+        return const Color(0xFFEF4444);
+      case TrainLine.harbour:
+        return const Color(0xFF10B981);
+    }
+  }
+
+  Future<void> _toggleLegExpanded(String trainNumber, String startCode, String endCode) async {
+    final legKey = "${trainNumber}_${startCode}_$endCode";
+    
+    if (_expandedLegKeys.contains(legKey)) {
+      setState(() {
+        _expandedLegKeys.remove(legKey);
+      });
+      return;
+    }
+
+    setState(() {
+      _expandedLegKeys.add(legKey);
+    });
+
+    if (_trainStopsCache.containsKey(trainNumber)) {
+      return; // Already loaded and cached
+    }
+
+    setState(() {
+      _loadingStops[trainNumber] = true;
+    });
+
+    try {
+      final schedule = await _apiService.getTrainSchedule(trainNumber);
+      if (mounted) {
+        setState(() {
+          _trainStopsCache[trainNumber] = schedule;
+          _loadingStops[trainNumber] = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _loadingStops[trainNumber] = false;
+        });
+      }
+    }
+  }
+
+  List<RailGadiTrainStop> _getIntermediateHalts(
+    List<RailGadiTrainStop> fullSchedule,
+    String startCode,
+    String endCode,
+  ) {
+    if (fullSchedule.isEmpty) return [];
+
+    int startIdx = fullSchedule.indexWhere((s) => s.stationCode.toUpperCase() == startCode.toUpperCase());
+    int endIdx = fullSchedule.indexWhere((s) => s.stationCode.toUpperCase() == endCode.toUpperCase());
+
+    // Fallback: search by Dadar DR/DDR variants
+    if (startIdx == -1 && (startCode == 'DDR' || startCode == 'DR')) {
+      startIdx = fullSchedule.indexWhere((s) => s.stationCode == 'DDR' || s.stationCode == 'DR');
+    }
+    if (endIdx == -1 && (endCode == 'DDR' || endCode == 'DR')) {
+      endIdx = fullSchedule.indexWhere((s) => s.stationCode == 'DDR' || s.stationCode == 'DR');
+    }
+
+    if (startIdx == -1 || endIdx == -1) {
+      return [];
+    }
+
+    if (startIdx <= endIdx) {
+      return fullSchedule.sublist(startIdx, endIdx + 1);
+    } else {
+      return fullSchedule.sublist(endIdx, startIdx + 1).reversed.toList();
+    }
+  }
+
+  Widget _buildLegStopsTimeline(PlannedRouteLeg leg, LiveTrainEntry train) {
+    final trainNumber = train.trainNumber;
+    final legKey = "${trainNumber}_${leg.start.code}_${leg.end.code}";
+
+    if (!_expandedLegKeys.contains(legKey)) {
+      return const SizedBox.shrink();
+    }
+
+    if (_loadingStops[trainNumber] == true) {
+      return Container(
+        margin: const EdgeInsets.only(left: 68, right: 16, top: 4, bottom: 8),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          children: [
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF19A66E)),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Text(
+              "Loading halts...",
+              style: GoogleFonts.outfit(
+                fontSize: 12,
+                color: const Color(0xFF64748B),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final fullSchedule = _trainStopsCache[trainNumber] ?? [];
+    final halts = _getIntermediateHalts(fullSchedule, leg.start.code, leg.end.code);
+
+    if (halts.isEmpty) {
+      return Container(
+        margin: const EdgeInsets.only(left: 68, right: 16, top: 4, bottom: 8),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Text(
+          "Halt details unavailable.",
+          style: GoogleFonts.outfit(
+            fontSize: 12,
+            color: const Color(0xFF64748B),
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      );
+    }
+
+    final lineColor = _getLineColor(leg.line);
+
+    return Container(
+      margin: const EdgeInsets.only(left: 68, right: 16, top: 4, bottom: 8),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: ListView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: halts.length,
+        itemBuilder: (context, index) {
+          final halt = halts[index];
+          final isFirst = index == 0;
+          final isLast = index == halts.length - 1;
+          final haltTime = halt.arrival ?? halt.departure ?? '';
+          final formattedHaltTime = _formatTo12Hour(haltTime);
+
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 16,
+                child: Column(
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: isFirst || isLast ? lineColor : Colors.white,
+                        border: Border.all(color: lineColor, width: 2),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    if (!isLast)
+                      Container(
+                        width: 2,
+                        height: 24,
+                        color: lineColor.withValues(alpha: 0.5),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 12.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          halt.stationName,
+                          style: GoogleFonts.outfit(
+                            fontSize: 12.5,
+                            fontWeight: isFirst || isLast ? FontWeight.bold : FontWeight.w500,
+                            color: isFirst || isLast ? const Color(0xFF1E293B) : const Color(0xFF475569),
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Text(
+                        formattedHaltTime,
+                        style: GoogleFonts.outfit(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.bold,
+                          color: const Color(0xFF64748B),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  List<PlannedRouteLeg> _calculateRouteLegs(MumbaiStation from, MumbaiStation to) {
+    if (from.code == to.code) return [];
+
+    if (from.line == to.line) {
+      final list = MumbaiStationData.getStationsByLine(from.line);
+      final idxStart = list.indexWhere((s) => s.code == from.code);
+      final idxEnd = list.indexWhere((s) => s.code == to.code);
+      final stopsCount = idxStart != -1 && idxEnd != -1 ? (idxEnd - idxStart).abs() : 5;
+      
+      return [
+        PlannedRouteLeg(
+          line: from.line,
+          start: from,
+          end: to,
+          description: "Take the ${from.line.displayName} Line direct.",
+          stopsCount: stopsCount,
+        ),
+      ];
+    }
+
+    TrainLine l1 = from.line;
+    TrainLine l2 = to.line;
+
+    String junctionName = "Dadar";
+    String codeL1 = "DDR";
+    String codeL2 = "DR";
+
+    if ((l1 == TrainLine.western && l2 == TrainLine.central) ||
+        (l1 == TrainLine.central && l2 == TrainLine.western)) {
+      junctionName = "Dadar";
+      codeL1 = (l1 == TrainLine.western) ? "DDR" : "DR";
+      codeL2 = (l2 == TrainLine.western) ? "DDR" : "DR";
+    } else if ((l1 == TrainLine.western && l2 == TrainLine.harbour) ||
+               (l1 == TrainLine.harbour && l2 == TrainLine.western)) {
+      junctionName = "Bandra";
+      codeL1 = "BA";
+      codeL2 = "BA";
+    } else if ((l1 == TrainLine.central && l2 == TrainLine.harbour) ||
+               (l1 == TrainLine.harbour && l2 == TrainLine.central)) {
+      junctionName = "Kurla";
+      codeL1 = "CLA";
+      codeL2 = "CLA";
+    }
+
+    final list1 = MumbaiStationData.getStationsByLine(l1);
+    final list2 = MumbaiStationData.getStationsByLine(l2);
+
+    final junctionStn1 = list1.firstWhere(
+      (s) => s.code == codeL1,
+      orElse: () => MumbaiStation(code: codeL1, name: junctionName, lat: from.lat, lng: from.lng, line: l1),
+    );
+    final junctionStn2 = list2.firstWhere(
+      (s) => s.code == codeL2,
+      orElse: () => MumbaiStation(code: codeL2, name: junctionName, lat: to.lat, lng: to.lng, line: l2),
+    );
+
+    final idxStart1 = list1.indexWhere((s) => s.code == from.code);
+    final idxJunction1 = list1.indexWhere((s) => s.code == codeL1);
+    final stopsCount1 = idxStart1 != -1 && idxJunction1 != -1 ? (idxJunction1 - idxStart1).abs() : 5;
+
+    final idxJunction2 = list2.indexWhere((s) => s.code == codeL2);
+    final idxEnd2 = list2.indexWhere((s) => s.code == to.code);
+    final stopsCount2 = idxJunction2 != -1 && idxEnd2 != -1 ? (idxEnd2 - idxJunction2).abs() : 5;
+
+    return [
+      PlannedRouteLeg(
+        line: l1,
+        start: from,
+        end: junctionStn1,
+        description: "Take ${l1.displayName} Line to ${junctionStn1.name}.",
+        stopsCount: stopsCount1,
+      ),
+      PlannedRouteLeg(
+        line: l2,
+        start: junctionStn2,
+        end: to,
+        description: "Transfer to ${l2.displayName} Line towards ${to.name}.",
+        stopsCount: stopsCount2,
+      ),
+    ];
+  }
+
+  Future<void> _calculateRouteItineraries() async {
+    final from = _routeFromStation;
+    final to = _routeToStation;
+    if (from == null || to == null) return;
+
+    setState(() {
+      _isLoadingRoutes = true;
+      _routesError = null;
+      _plannedTrips = [];
+    });
+
+    try {
+      final legs = _calculateRouteLegs(from, to);
+      if (legs.isEmpty) {
+        setState(() {
+          _isLoadingRoutes = false;
+        });
+        return;
+      }
+
+      final Map<String, List<LiveTrainEntry>> timetables = {};
+      for (final leg in legs) {
+        if (!timetables.containsKey(leg.start.code)) {
+          final list = await _apiService.getStationTimetable(leg.start.code);
+          timetables[leg.start.code] = list;
+        }
+      }
+
+      final leg1 = legs[0];
+      final leg1Timetable = timetables[leg1.start.code] ?? [];
+      
+      final list1 = MumbaiStationData.getStationsByLine(leg1.line);
+      final idxStart1 = list1.indexWhere((s) => s.code == leg1.start.code);
+      final idxEnd1 = list1.indexWhere((s) => s.code == leg1.end.code);
+      final isDown1 = idxEnd1 > idxStart1;
+
+      final now = DateTime.now();
+      final currentMinutes = now.hour * 60 + now.minute;
+
+      final List<LiveTrainEntry> leg1MatchingTrains = [];
+      for (final train in leg1Timetable) {
+        final depTime = train.scheduledDeparture ?? '';
+        if (depTime.isEmpty) continue;
+        final parts = depTime.split(':');
+        if (parts.length < 2) continue;
+        final hr = int.tryParse(parts[0]) ?? 0;
+        final min = int.tryParse(parts[1]) ?? 0;
+        final trainMinutes = hr * 60 + min;
+
+        if (trainMinutes < currentMinutes - 2) continue;
+
+        final trainDest = train.destinationStation;
+        final idxTrainDest = list1.indexWhere((s) => s.code == trainDest);
+        if (idxTrainDest != -1) {
+          final isTrainDown = idxTrainDest > idxStart1;
+          if (isTrainDown != isDown1) continue;
+        }
+        
+        leg1MatchingTrains.add(train);
+      }
+
+      leg1MatchingTrains.sort((a, b) {
+        final depA = a.scheduledDeparture ?? '';
+        final depB = b.scheduledDeparture ?? '';
+        return depA.compareTo(depB);
+      });
+
+      final nextLeg1Trains = leg1MatchingTrains.take(4).toList();
+      final List<PlannedTripItinerary> trips = [];
+
+      for (final train1 in nextLeg1Trains) {
+        final depTimeStr1 = train1.scheduledDeparture ?? '';
+        final depParts = depTimeStr1.split(':');
+        final depHr = int.tryParse(depParts[0]) ?? 0;
+        final depMin = int.tryParse(depParts[1]) ?? 0;
+        final depMinutes = depHr * 60 + depMin;
+
+        final duration1 = leg1.stopsCount * 2 + 1;
+        final arrMinutes1 = depMinutes + duration1;
+        final arrHr = (arrMinutes1 ~/ 60) % 24;
+        final arrMin = arrMinutes1 % 60;
+        final arrTimeStr1 = '${arrHr.toString().padLeft(2, '0')}:${arrMin.toString().padLeft(2, '0')}';
+
+        final leg1Itinerary = PlannedRouteLegItinerary(
+          leg: leg1,
+          train: train1,
+          departureTime: depTimeStr1,
+          arrivalTime: arrTimeStr1,
+        );
+
+        if (legs.length == 1) {
+          trips.add(PlannedTripItinerary(
+            legItineraries: [leg1Itinerary],
+            totalDurationMinutes: duration1,
+          ));
+        } else {
+          final leg2 = legs[1];
+          final leg2Timetable = timetables[leg2.start.code] ?? [];
+
+          final list2 = MumbaiStationData.getStationsByLine(leg2.line);
+          final idxStart2 = list2.indexWhere((s) => s.code == leg2.start.code);
+          final idxEnd2 = list2.indexWhere((s) => s.code == leg2.end.code);
+          final isDown2 = idxEnd2 > idxStart2;
+
+          final minDepartureMinutes2 = arrMinutes1 + 3;
+
+          LiveTrainEntry? connectingTrain;
+          for (final train2 in leg2Timetable) {
+            final depTime2 = train2.scheduledDeparture ?? '';
+            if (depTime2.isEmpty) continue;
+            final parts2 = depTime2.split(':');
+            if (parts2.length < 2) continue;
+            final hr2 = int.tryParse(parts2[0]) ?? 0;
+            final min2 = int.tryParse(parts2[1]) ?? 0;
+            final trainMinutes2 = hr2 * 60 + min2;
+
+            if (trainMinutes2 < minDepartureMinutes2) continue;
+
+            final trainDest2 = train2.destinationStation;
+            final idxTrainDest2 = list2.indexWhere((s) => s.code == trainDest2);
+            if (idxTrainDest2 != -1) {
+              final isTrainDown2 = idxTrainDest2 > idxStart2;
+              if (isTrainDown2 != isDown2) continue;
+            }
+
+            if (connectingTrain == null) {
+              connectingTrain = train2;
+            } else {
+              final currentBest = connectingTrain.scheduledDeparture ?? '';
+              if (depTime2.compareTo(currentBest) < 0) {
+                connectingTrain = train2;
+              }
+            }
+          }
+
+          if (connectingTrain != null) {
+            final depTimeStr2 = connectingTrain.scheduledDeparture ?? '';
+            final depParts2 = depTimeStr2.split(':');
+            final depHr2 = int.tryParse(depParts2[0]) ?? 0;
+            final depMin2 = int.tryParse(depParts2[1]) ?? 0;
+            final depMinutes2 = depHr2 * 60 + depMin2;
+
+            final duration2 = leg2.stopsCount * 2 + 1;
+            final arrMinutes2 = depMinutes2 + duration2;
+            final arrHr2 = (arrMinutes2 ~/ 60) % 24;
+            final arrMin2 = arrMinutes2 % 60;
+            final arrTimeStr2 = '${arrHr2.toString().padLeft(2, '0')}:${arrMin2.toString().padLeft(2, '0')}';
+
+            final leg2Itinerary = PlannedRouteLegItinerary(
+              leg: leg2,
+              train: connectingTrain,
+              departureTime: depTimeStr2,
+              arrivalTime: arrTimeStr2,
+            );
+
+            final totalTripDuration = arrMinutes2 - depMinutes;
+
+            trips.add(PlannedTripItinerary(
+              legItineraries: [leg1Itinerary, leg2Itinerary],
+              totalDurationMinutes: totalTripDuration,
+            ));
+          }
+        }
+      }
+
+      setState(() {
+        _plannedTrips = trips;
+        _isLoadingRoutes = false;
+      });
+    } catch (e) {
+      setState(() {
+        _routesError = e.toString();
+        _isLoadingRoutes = false;
+      });
+    }
+  }
 }
 
-/// Small inline disruption banner widget.
+class PlannedRouteLeg {
+  final TrainLine line;
+  final MumbaiStation start;
+  final MumbaiStation end;
+  final String description;
+  final int stopsCount;
+
+  PlannedRouteLeg({
+    required this.line,
+    required this.start,
+    required this.end,
+    required this.description,
+    required this.stopsCount,
+  });
+}
+
+class PlannedTripItinerary {
+  final List<PlannedRouteLegItinerary> legItineraries;
+  final int totalDurationMinutes;
+  
+  PlannedTripItinerary({
+    required this.legItineraries,
+    required this.totalDurationMinutes,
+  });
+}
+
+class PlannedRouteLegItinerary {
+  final PlannedRouteLeg leg;
+  final LiveTrainEntry train;
+  final String departureTime;
+  final String arrivalTime;
+  
+  PlannedRouteLegItinerary({
+    required this.leg,
+    required this.train,
+    required this.departureTime,
+    required this.arrivalTime,
+  });
+}
+
 class _AlertBanner extends StatelessWidget {
   final IconData icon;
   final Color color;
